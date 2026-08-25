@@ -34,13 +34,14 @@ The platform is strictly paywalled through a serverless, non-custodial licensing
 
 ```
 focus-bot/
+├── .github/workflows/     # CI: automated test runner & syntax checks
 ├── client/                # Frontend application & synthesis core
 │   ├── index.html         # User landing page & audio controls
-│   └── focus-bot.js       # Web Audio synthesizer, event loop & worker bridge
+│   ├── focus-bot.js       # Web Audio synthesizer, event loop & worker bridge
+│   └── focus-bot.css      # Dark-mode UI styling & payment modal
 ├── worker/                # Serverless licensing gateway (Cloudflare)
 │   ├── index.js           # REST API: pricing, mempool verifier, license generator
-│   ├── wrangler.toml      # Worker config, KV bindings, allowed origins
-│   └── .dev.vars          # Local dev secrets (not committed)
+│   └── wrangler.toml      # Worker config, KV bindings, allowed origins
 ├── tests/                 # Zero-dependency test suite (Node.js)
 │   └── suite.js           # Security, pricing, underpayment & double-spend assertions
 ├── run-tests.js           # CLI test runner
@@ -53,6 +54,7 @@ focus-bot/
 **Prerequisites**
 
 - Node.js 18.0+
+- Python 3.10+ (for local client preview)
 - Cloudflare Wrangler CLI (`npm install -g wrangler`)
 
 ```bash
@@ -113,9 +115,7 @@ node run-tests.js
 - [x] Dynamic €12/year BTC satoshi converter with KV caching
 - [x] Mempool.space on-chain transaction verifier
 - [x] Strict underpayment (402) and replay (409) guards
-- [x] Hard paywall — zero free trial, license required for all playback
-- [x] Server-side license verification on every page load
-- [x] 20/20 automated unit & integration tests
+- [x] 11/11 automated unit & integration tests
 - [ ] Presets for Pomodoro-integrated wave sweeps
 - [ ] Hardware-accelerated Web Audio visualizer (Canvas/WebGL)
 - [ ] Lightning Network (L402 / LNURL) instant payment support
@@ -158,13 +158,14 @@ Platform, Cloudflare Workers üzerinde barındırılan ve doğrudan Bitcoin blok
 
 ```
 focus-bot/
+├── .github/workflows/     # CI: otomatik testler ve sözdizimi denetimi
 ├── client/                # İstemci uygulaması ve ses motoru
 │   ├── index.html         # Kullanıcı arayüzü ve ses kontrolleri
-│   └── focus-bot.js       # Web Audio sentezleyici ve API köprüsü
+│   ├── focus-bot.js       # Web Audio sentezleyici ve API köprüsü
+│   └── focus-bot.css      # Koyu tema stilleri ve ödeme penceresi
 ├── worker/                # Sunucusuz lisans ağ geçidi (Cloudflare)
 │   ├── index.js           # REST API: fiyatlandırma, doğrulama, lisans üretimi
-│   ├── wrangler.toml      # Worker ayarları, KV tanımları, origin izinleri
-│   └── .dev.vars          # Yerel geliştirme sırları (depolanmaz)
+│   └── wrangler.toml      # Worker ayarları, KV tanımları, origin izinleri
 ├── tests/                 # Bağımsız test paketi (Node.js)
 │   └── suite.js           # Güvenlik, fiyatlandırma, eksik ödeme testleri
 ├── run-tests.js           # Test çalıştırıcı betik
@@ -177,6 +178,7 @@ focus-bot/
 **Ön Gereksinimler**
 
 - Node.js 18.0+
+- Python 3.10+ (yerel test sunucusu için)
 - Cloudflare Wrangler CLI (`npm install -g wrangler`)
 
 ```bash
@@ -210,16 +212,6 @@ Tarayıcınızdan `http://localhost:5500` adresini açın.
 node run-tests.js
 ```
 
-### API Belirtimi
-
-| Endpoint | Yöntem | Açıklama | Yetkilendirme |
-|---|---|---|---|
-| `/api/health` | GET | Worker sağlık kontrolü | Yok |
-| `/api/pricing` | GET | Canlı BTC/EUR kuru ve gerekli satoshi miktarı | Yok |
-| `/api/verify-tx` | POST | On-chain TXID doğrulaması ve 365 günlük Pro lisansı verir | Yok |
-| `/api/verify-license` | POST | Lisans anahtarı ve domain doğrulaması | Yok |
-| `/api/admin/grant` | POST | Manuel lisans dağıtımı | Bearer ADMIN_TOKEN |
-
 ### Güvenlik ve Uyumluluk
 
 | Katman | Uygulama |
@@ -237,9 +229,7 @@ node run-tests.js
 - [x] 12€/yıl dinamik BTC dönüştürücü ve KV önbelleği
 - [x] Mempool.space blokzincir doğrulayıcısı
 - [x] Eksik bakiye (402) ve tekrar kullanım (409) kontrolleri
-- [x] Zorunlu ödeme — ücretsiz deneme yok, tüm oynatma lisans gerektirir
-- [x] Her sayfa yüklemesinde sunucu taraflı lisans doğrulaması
-- [x] 20/20 kapsamlı otomatik test paketi
+- [x] 11/11 kapsamlı otomatik test paketi
 - [ ] Pomodoro entegrasyonlu dalga profilleri
 - [ ] WebGL/Canvas tabanlı gerçek zamanlı ses görselleştirici
 - [ ] Lightning Network (L402) anında ödeme desteği

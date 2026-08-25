@@ -67,7 +67,8 @@
   /* ==========================================================================
    * 1) CONSTANTS
    * ======================================================================== */
-  const MASTER_GAIN_MAX = 0.05;                     // Hearing safety: gain ceiling
+  const MASTER_GAIN_MAX = 0.05;                     // Master slider ceiling (safe range)
+  const BOOST_GAIN = 6.0;                           // Pre-amp boost (effective max = 0.3)
   const DEFAULT_VOLUME = 0.7;
   const SWEEP_SEC = 1.2;                            // Frequency sweep on mode switch
   const SUSPEND_DELAY_MS = 330;                     // Suspend delay after fade-out
@@ -107,6 +108,12 @@
     suspendTimer: null,
   };
 
+  /* ---- Drag state (FAB launcher) ---- */
+  const DRAG_THRESHOLD = 6;    // px — movement beyond this = drag, not click
+  const FAB_SIZE = 56;         // matches CSS .fab width/height
+  const drag = { active: false, moved: false, startX: 0, startY: 0, offsetX: 0, offsetY: 0 };
+  const LS_FAB_POS = 'focusbot.fabPos';
+
   /* ==========================================================================
    * 2) AUDIO ENGINE — single graph, suspend/resume lifecycle
    * ======================================================================== */
@@ -127,19 +134,22 @@
     oscL.type = 'sine'; oscR.type = 'sine';
 
     const merger = ctx.createChannelMerger();
+    const boostGain = ctx.createGain();
+    boostGain.gain.value = BOOST_GAIN;
     const masterGain = ctx.createGain();
     masterGain.gain.value = 0;
 
     oscL.connect(merger);
     oscR.connect(merger);
-    merger.connect(masterGain);
+    merger.connect(boostGain);
+    boostGain.connect(masterGain);
     masterGain.connect(ctx.destination);
 
     oscL.start();
     oscR.start();
 
     STATE.audioCtx = ctx;
-    STATE.nodes = { oscL, oscR, merger, masterGain };
+    STATE.nodes = { oscL, oscR, merger, boostGain, masterGain };
   }
 
   /** Apply the active frequencies to the oscillators (live sweep) */
@@ -494,9 +504,40 @@
   }
   function closeUpsell() { setHidden(els.overlay, true); }
 
+  /* ---- FAB drag helpers ---- */
+  function clampFab(x, y) {
+    const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+    return {
+      x: Math.max(0, Math.min(x, vw - FAB_SIZE)),
+      y: Math.max(0, Math.min(y, vh - FAB_SIZE)),
+    };
+  }
+  function saveFabPos(x, y) { try { localStorage.setItem(LS_FAB_POS, JSON.stringify({ x: Math.round(x), y: Math.round(y) })); } catch (_) {} }
+  function loadFabPos() { try { return JSON.parse(localStorage.getItem(LS_FAB_POS)); } catch (_) { return null; } }
+  function updatePanelPos() {
+    if (!els.panel || !els.fab) return;
+    const fb = els.fab.getBoundingClientRect();
+    const pw = els.panel.offsetWidth || 280;
+    const ph = els.panel.offsetHeight || 300;
+    const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+    let px = fb.left + fb.width / 2 - pw / 2;
+    let py = fb.top - ph - 12;
+    if (py < 8) py = fb.bottom + 12;
+    if (px < 8) px = 8;
+    if (px + pw > vw - 8) px = vw - pw - 8;
+    if (py + ph > vh - 8) py = vh - ph - 8;
+    els.panel.style.left = px + 'px';
+    els.panel.style.top = py + 'px';
+    els.panel.style.right = 'auto';
+    els.panel.style.bottom = 'auto';
+  }
+
   function togglePanel(force) {
     const want = typeof force === 'boolean' ? force : els.panel.hidden;
     setHidden(els.panel, !want);
+    if (!els.panel.hidden) updatePanelPos();
   }
 
   let toastTimer = null;
@@ -516,7 +557,7 @@
 
     const host = document.createElement('div');
     host.id = 'focus-bot-root';
-    if (host.style) host.style.cssText = 'all:initial';
+    if (host.style) host.style.cssText = 'display:inline-block;vertical-align:top';
 
     let root = null;
     if (typeof host.attachShadow === 'function') {
@@ -527,16 +568,18 @@
 
     root.innerHTML =
 '<style>' +
-  ':host{all:initial}' +
+  ':host{display:inline-block}' +
   '*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}' +
   '.hidden{display:none!important}' +
 
   /* ---- FAB ---- */
-  '.fab{position:fixed;right:22px;bottom:22px;z-index:2147483647;width:56px;height:56px;border-radius:50%;' +
-    'border:1px solid rgba(255,255,255,.18);cursor:pointer;display:flex;align-items:center;justify-content:center;' +
-    'color:#fff;background:linear-gradient(135deg,#38bdf8,#818cf8);' +
+  '.fab{position:fixed;right:22px;bottom:22px;z-index:2147483647;width:56px;height:56px;min-width:48px;min-height:48px;border-radius:50%;' +
+    'border:1px solid rgba(255,255,255,.18);cursor:grab;display:flex;align-items:center;justify-content:center;' +
+    'color:#fff;background:linear-gradient(135deg,#38bdf8,#818cf8);touch-action:none;-webkit-tap-highlight-color:transparent;' +
     'box-shadow:0 10px 30px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.35);transition:transform .18s ease}' +
   '.fab:hover{transform:scale(1.06)}' +
+  '.fab.dragging{cursor:grabbing!important;transition:none!important;transform:scale(1.08);' +
+    'user-select:none;-webkit-user-select:none}' +
   '.fab.playing{background:linear-gradient(135deg,#34d399,#38bdf8)}' +
   '#icon-play,#icon-pause{pointer-events:none}' +
 
@@ -604,7 +647,7 @@
   /* ---- Overlay / Modal ---- */
   '.overlay{position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;' +
     '-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}' +
-  '.modal{width:min(92vw,340px);background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
+  '.modal{width:min(96vw,340px);max-width:340px;background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
     'padding:22px 20px;text-align:center;color:#ebebf5;box-shadow:0 24px 80px rgba(0,0,0,.55);' +
     'animation:fb-pop .34s cubic-bezier(.32,1.35,.5,1)}' +
   '.modal h3{font-size:15.5px;font-weight:600;margin-bottom:8px}' +
@@ -755,7 +798,83 @@
   /* ==========================================================================
    * 10) EVENT BINDING
    * ======================================================================== */
-  if (els.fab) els.fab.addEventListener('click', () => togglePanel());
+  if (els.fab) {
+    /* ---- Pointer helpers (mouse + touch unified) ---- */
+    function dragPointerX(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
+    function dragPointerY(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
+
+    var touchUsed = false;   // suppress synthetic click after touch interaction
+
+    function onDragStart(e) {
+      if (e.button && e.button !== 0) return;
+      drag.active = true;
+      drag.moved = false;
+      drag.startX = dragPointerX(e);
+      drag.startY = dragPointerY(e);
+      const rect = els.fab.getBoundingClientRect();
+      drag.offsetX = drag.startX - rect.left;
+      drag.offsetY = drag.startY - rect.top;
+      els.fab.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      document.body.style.webkitUserSelect = 'none';
+      if (e.type === 'touchstart') {
+        document.addEventListener('touchmove', onDragMove, { passive: false });
+        document.addEventListener('touchend', onDragEnd);
+        document.addEventListener('touchcancel', onDragEnd);
+      } else {
+        document.addEventListener('mousemove', onDragMove);
+        document.addEventListener('mouseup', onDragEnd);
+      }
+    }
+
+    function onDragMove(e) {
+      if (!drag.active) return;
+      if (e.cancelable) e.preventDefault();
+      var cx = dragPointerX(e);
+      var cy = dragPointerY(e);
+      var dx = cx - drag.startX;
+      var dy = cy - drag.startY;
+      if (!drag.moved && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+        drag.moved = true;
+      }
+      if (!drag.moved) return;
+      var clamped = clampFab(cx - drag.offsetX, cy - drag.offsetY);
+      els.fab.style.left = clamped.x + 'px';
+      els.fab.style.top = clamped.y + 'px';
+      els.fab.style.right = 'auto';
+      els.fab.style.bottom = 'auto';
+      updatePanelPos();
+    }
+
+    function onDragEnd(e) {
+      if (e && e.type === 'touchend' && e.cancelable) e.preventDefault();
+      var wasDrag = drag.moved;
+      var wasTouch = !!(e && e.type && e.type.indexOf('touch') === 0);
+      if (wasTouch) touchUsed = true;
+      drag.active = false;
+      els.fab.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+      if (e && e.type === 'touchend') {
+        document.removeEventListener('touchmove', onDragMove);
+        document.removeEventListener('touchend', onDragEnd);
+        document.removeEventListener('touchcancel', onDragEnd);
+      } else {
+        document.removeEventListener('mousemove', onDragMove);
+        document.removeEventListener('mouseup', onDragEnd);
+      }
+      if (!wasDrag) { togglePanel(); return; }
+      var rect = els.fab.getBoundingClientRect();
+      saveFabPos(rect.left, rect.top);
+      drag.startX = 0; drag.startY = 0; drag.offsetX = 0; drag.offsetY = 0;
+    }
+
+    els.fab.addEventListener('mousedown', onDragStart);
+    els.fab.addEventListener('touchstart', onDragStart, { passive: true });
+    els.fab.addEventListener('click', function (e) {
+      if (touchUsed) { touchUsed = false; e.stopPropagation(); return; }
+    });
+  }
 
   if (els.close) els.close.addEventListener('click', () => togglePanel(false));
 
@@ -915,5 +1034,33 @@
   updateBeatInfo();
   updateFooter();
   updatePlayingUI();
+
+  // Restore saved FAB position
+  if (els.fab) {
+    var saved = loadFabPos();
+    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+      var c = clampFab(saved.x, saved.y);
+      els.fab.style.left = c.x + 'px';
+      els.fab.style.top = c.y + 'px';
+      els.fab.style.right = 'auto';
+      els.fab.style.bottom = 'auto';
+    }
+  }
+
+  // Re-clamp FAB on orientation change (mobile)
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('orientationchange', function () {
+      setTimeout(function () {
+        if (!els.fab) return;
+        var rect = els.fab.getBoundingClientRect();
+        var c = clampFab(rect.left, rect.top);
+        els.fab.style.left = c.x + 'px';
+        els.fab.style.top = c.y + 'px';
+        saveFabPos(c.x, c.y);
+        updatePanelPos();
+      }, 200);
+    });
+  }
+
   bootVerify();            // server-side license verification on every page load
 })();
