@@ -1,243 +1,131 @@
 # FOCUS-BOT
 
-**Real-Time Neural Beat Synthesizer & On-Chain Cognitive Flow Accelerator**
+**Her sekmede çalışan, harici ses indirmeyen, Web Audio tabanlı odaklanma eklentisi.**
 
-> FOR COGNITIVE MODULATION & RESEARCH USE. NO AUDIO SAMPLES BUFFERED. ZERO EXTERNAL SOUND ASSETS.
+> Chrome, Brave ve Edge tarayıcılarıyla uyumlu. Sıfır dış ses dosyası. Tüm ses üretimi tarayıcınızın içinde gerçekleşir.
 
 ---
 
 ## English
 
-### Overview
+### What is FocusBot?
 
-FOCUS-BOT is an edge-native, zero-dependency browser synthesis platform designed to induce target cognitive states (Alpha, Beta, Theta, Gamma) via client-side phase-shifted binaural oscillations and harmonic soundwaves. Unlike traditional white-noise tools that stream static MP3/WAV files, FOCUS-BOT synthesizes raw waveform audio directly on the client machine using native Web Audio API oscillators, ensuring sub-millisecond modulation control and zero bandwidth overhead.
+FocusBot is a lightweight browser extension that generates binaural beats in real-time using your browser's native Web Audio API. It helps you enter deep focus, relaxation, or creative flow states by playing precise frequency patterns — without downloading any audio files.
 
-The platform is strictly paywalled through a serverless, non-custodial licensing infrastructure hosted on Cloudflare Workers and verified on-chain via the Bitcoin network.
+Each cognitive mode targets a different brainwave band:
 
-### Key Features
+| Mode | Beat Frequency | Best For |
+|---|---|---|
+| **Beta** | 13–30 Hz | Active concentration, coding, task execution |
+| **Alpha** | 8–13 Hz | Deep learning, relaxed alertness, memory |
+| **Theta** | 4–8 Hz | Creativity, meditation, brainstorming |
+| **Gamma** | 30–100 Hz | High-level cognition, pattern recognition |
 
-- **Real-Time Client-Side Synthesis:** Native mathematical waveform generation without pre-recorded sound assets or external audio streaming.
-- **Dynamic On-Chain Verification:**
-  - Auto-pegged to €12.00 / year, evaluated dynamically into satoshis at request time via CoinGecko / Mempool failover.
-  - Instant on-chain verification via mempool.space API.
-- **Strict Underpayment Immunity:** Rejects underpaid transactions (402 Insufficient Amount) without granting access.
-- **Anti-Replay Defense:** TXIDs permanently locked in Cloudflare KV (409 Conflict).
-- **Cognitive Frequency Spectra:**
-  - **Beta (13–30 Hz):** Active concentration, task execution, coding flow.
-  - **Alpha (8–13 Hz):** Deep learning, relaxed alertness, memory consolidation.
-  - **Theta (4–8 Hz):** Creativity, meditation, lateral problem-solving.
-  - **Gamma (30–100 Hz):** High-level neuro-synchronization and cognitive binding.
-- **Granular Modulation:** Precision oscillator sweep controls from 0.1 Hz to 1000 Hz.
-- **Edge-Native License Verification:** Global low-latency domain & license validation via Cloudflare Workers KV.
+You can also set custom frequencies between 0.1 Hz and 1000 Hz.
 
-### Repository Structure
+### How to Install (3 steps, ~10 seconds)
 
-```
-focus-bot/
-├── .github/workflows/     # CI: automated test runner & syntax checks
-├── client/                # Frontend application & synthesis core
-│   ├── index.html         # User landing page & audio controls
-│   ├── focus-bot.js       # Web Audio synthesizer, event loop & worker bridge
-│   └── focus-bot.css      # Dark-mode UI styling & payment modal
-├── worker/                # Serverless licensing gateway (Cloudflare)
-│   ├── index.js           # REST API: pricing, mempool verifier, license generator
-│   └── wrangler.toml      # Worker config, KV bindings, allowed origins
-├── tests/                 # Zero-dependency test suite (Node.js)
-│   └── suite.js           # Security, pricing, underpayment & double-spend assertions
-├── run-tests.js           # CLI test runner
-├── package.json           # Node scripts and configs
-└── README.md
-```
+1. **Download the extension**
+   - Go to [Releases](https://github.com/runtime-stranger/focus-bot/releases) and download `focus-bot-extension.zip`
+   - Unzip the file to a folder you'll remember (e.g. `Desktop/FocusBot`)
 
-### Installation & Quickstart
+2. **Open your browser's extension page**
+   - **Chrome / Brave:** Type `chrome://extensions` in the address bar
+   - **Edge:** Type `edge://extensions` in the address bar
 
-**Prerequisites**
+3. **Enable Developer Mode & drag the folder**
+   - Toggle **Developer Mode** ON (top-right corner)
+   - Click **Load unpacked** (top-left)
+   - Select the unzipped `client` folder
+   - Done! A small floating button appears on every page
 
-- Node.js 18.0+
-- Python 3.10+ (for local client preview)
-- Cloudflare Wrangler CLI (`npm install -g wrangler`)
+### Activation (12 € / Year via Bitcoin)
 
-```bash
-git clone https://github.com/YOUR_USERNAME/focus-bot.git
-cd focus-bot
-npm install
-```
+FocusBot requires a one-time annual license activated through Bitcoin:
 
-**Run the Edge Backend (Worker)**
+1. Click the floating button on any webpage
+2. Click **Upgrade to Pro** in the panel
+3. Send the displayed satoshi amount to the Bitcoin address
+4. Paste your transaction ID (TXID) or license key into the activation field
+5. Click **Activate** — your license is valid for 365 days
 
-```bash
-cd worker
-npx wrangler kv namespace create LICENSES
-# Update wrangler.toml with the returned ID and your BTC_ADDRESS
-npx wrangler deploy
-```
+The price is pegged to **12 EUR/year** and automatically converted to satoshis at the current Bitcoin exchange rate.
 
-**Run the Frontend Locally**
+### Features
 
-```bash
-cd ../client
-python -m http.server 5500
-```
-
-Open `http://localhost:5500` in your browser.
-
-**Run Test Suite**
-
-```bash
-# In the root directory:
-node run-tests.js
-```
-
-### API Specification
-
-| Endpoint | Method | Description | Auth |
-|---|---|---|---|
-| `/api/health` | GET | Edge worker uptime verification | None |
-| `/api/pricing` | GET | Fetches live BTC/EUR exchange metrics & required satoshis | None |
-| `/api/verify-tx` | POST | Validates on-chain TXID and issues a 365-day Pro license | None |
-| `/api/verify-license` | POST | Validates active domain and license key integrity | None |
-| `/api/admin/grant` | POST | Manual license issuance | Bearer ADMIN_TOKEN |
-
-### Security & Compliance
-
-| Layer | Implementation |
-|---|---|
-| Authentication | Bearer token validation with constant-time cryptographic comparison |
-| Rate Limiting | Sliding-window request throttling on Cloudflare KV |
-| CORS Policy | Explicit origin whitelisting (ALLOWED_ORIGINS) |
-| Transaction Guard | Atomically locked `tx:<TXID>` keys preventing double activations |
-| Amount Enforcement | Strict multi-output satoshi aggregation against dynamic rate target |
-
-### Roadmap
-
-- [x] Web Audio binaural frequency engine
-- [x] Cloudflare Worker edge licensing API
-- [x] Dynamic €12/year BTC satoshi converter with KV caching
-- [x] Mempool.space on-chain transaction verifier
-- [x] Strict underpayment (402) and replay (409) guards
-- [x] 11/11 automated unit & integration tests
-- [ ] Presets for Pomodoro-integrated wave sweeps
-- [ ] Hardware-accelerated Web Audio visualizer (Canvas/WebGL)
-- [ ] Lightning Network (L402 / LNURL) instant payment support
+- **Real-time synthesis** — no audio files downloaded, no buffering, zero bandwidth
+- **Draggable launcher** — position the button anywhere on screen (remembers position)
+- **Custom frequencies** — fine-tune left/right oscillators from 0.1 to 1000 Hz
+- **Volume boost** — pre-amplified audio for louder output
+- **Works everywhere** — runs on any website via content script
+- **Dark glassmorphism UI** — minimal, non-intrusive design
 
 ### License
 
-Proprietary Commercial Software. All rights reserved. See LICENSE.
+Proprietary Commercial Software. All rights reserved.
 
 ### Legal Disclaimer
 
-FOCUS-BOT is a scientific sound synthesis and productivity utility. It is not a medical device and is not intended to diagnose, treat, or cure any cognitive, neurological, or psychiatric conditions. Bitcoin transactions are irreversible; verify payment parameters before broadcasting.
+FocusBot is a sound synthesis and productivity tool. It is not a medical device and is not intended to diagnose, treat, or cure any cognitive, neurological, or psychiatric conditions. Bitcoin transactions are irreversible; verify payment parameters before broadcasting.
 
 ---
 
 ## Türkçe
 
-### Genel Bakış
+### FocusBot Nedir?
 
-FOCUS-BOT, harici ses dosyaları kullanmadan doğrudan istemci tarafında faz kaydırmalı binaural vuruşlar ve harmonik ses dalgaları üreterek hedeflenen bilişsel durumları (Alpha, Beta, Teta, Gama) tetikleyen sıfır bağımlılıklı nöral ses sentezleme platformudur. Standart ses oynatıcılarının aksine, tarayıcının yerel Web Audio API osilatörlerini kullanarak gecikmesiz modülasyon sağlar ve bant genişliği harcamaz.
+FocusBot, tarayıcınızın Web Audio API'sini kullanarak binaural beat'leri gerçek zamanlı üreten hafif bir tarayıcı eklentisidir. Herhangi bir ses dosyası indirmeden odaklanma, rahatlama veya yaratıcı akış durumlarına girmenize yardımcı olur.
 
-Platform, Cloudflare Workers üzerinde barındırılan ve doğrudan Bitcoin blokzinciri üzerinden doğrulanan merkeziyetsiz bir ödeme ve lisanslama mimarisiyle korunmaktadır.
+| Mod | Frekans | En İyi Kullanım Alanı |
+|---|---|---|
+| **Beta** | 13–30 Hz | Aktif odaklanma, kodlama, görev yürütme |
+| **Alpha** | 8–13 Hz | Derin öğrenme, sakin uyanıklık, hafıza |
+| **Theta** | 4–8 Hz | Yaratıcılık, meditasyon, beyin fırtınası |
+| **Gamma** | 30–100 Hz | Üst düzey bilişsel performans |
 
-### Temel Özellikler
+0.1 Hz ile 1000 Hz arasında özel frekanslar da ayarlayabilirsiniz.
 
-- **Gerçek Zamanlı İstemci Sentezi:** Önceden kaydedilmiş ses dosyası (MP3/WAV) olmadan doğrudan matematiksel dalga formu üretimi.
-- **Dinamik Blokzincir Doğrulaması:**
-  - Yıllık 12.00 € sabit kur; CoinGecko/Mempool üzerinden anlık satoshi miktarına dönüştürülür.
-  - mempool.space API üzerinden otomatik on-chain transfer kontrolü.
-- **Eksik Ödeme Koruması:** 1 satoshi dahi eksik transferlerde işlemi anında reddeder (402 Insufficient Amount).
-- **Tekrar Engelleme (Anti-Replay):** Doğrulanan TXID'ler Cloudflare KV'ye kalıcı olarak işlenir (409 Conflict).
-- **Bilişsel Frekans Aralıkları:**
-  - **Beta (13–30 Hz):** Aktif odaklanma, problem çözme, kodlama akışı.
-  - **Alpha (8–13 Hz):** Derin öğrenme, sakin uyanıklık, hafıza pekiştirme.
-  - **Theta (4–8 Hz):** Yaratıcılık, meditasyon, serbest çağrışım.
-  - **Gamma (30–100 Hz):** Üst düzey bilişsel entegrasyon ve kavrayış.
-- **Hassas Modülasyon:** 0.1 Hz – 1000 Hz aralığında hassas frekans kontrolü.
-- **Uç Ağda Lisanslama:** Cloudflare Workers KV ile küresel düşük gecikmeli lisans denetimi.
+### Nasıl Kurulur? (3 adım, ~10 saniye)
 
-### Depo Yapısı
+1. **Eklentiyi indirin**
+   - [Releases](https://github.com/runtime-stranger/focus-bot/releases) sayfasına gidin ve `focus-bot-extension.zip` dosyasını indirin
+   - Dosyayı hatırlayacağınız bir klasöre çıkarın (ör. `Masaüstü/FocusBot`)
 
-```
-focus-bot/
-├── .github/workflows/     # CI: otomatik testler ve sözdizimi denetimi
-├── client/                # İstemci uygulaması ve ses motoru
-│   ├── index.html         # Kullanıcı arayüzü ve ses kontrolleri
-│   ├── focus-bot.js       # Web Audio sentezleyici ve API köprüsü
-│   └── focus-bot.css      # Koyu tema stilleri ve ödeme penceresi
-├── worker/                # Sunucusuz lisans ağ geçidi (Cloudflare)
-│   ├── index.js           # REST API: fiyatlandırma, doğrulama, lisans üretimi
-│   └── wrangler.toml      # Worker ayarları, KV tanımları, origin izinleri
-├── tests/                 # Bağımsız test paketi (Node.js)
-│   └── suite.js           # Güvenlik, fiyatlandırma, eksik ödeme testleri
-├── run-tests.js           # Test çalıştırıcı betik
-├── package.json           # Proje paket yapılandırması
-└── README.md
-```
+2. **Tarayıcınızın eklenti sayfasını açın**
+   - **Chrome / Brave:** Adres çubuğuna `chrome://extensions` yazın
+   - **Edge:** Adres çubuğuna `edge://extensions` yazın
 
-### Kurulum ve Başlangıç
+3. **Geliştirici Modu'nu açın ve klasörü sürükleyin**
+   - **Geliştirici Modu**'nu Açın (sağ üst köşe)
+   - **Paketlenmemiş yükle** (Load unpacked) tıklayın (sol üst)
+   - Çıkardığınız `client` klasörünü seçin
+   - Hazır! Her sayfada küçük bir yüzen buton belirecektir
 
-**Ön Gereksinimler**
+### Aktivasyon (12 € / Yıl Bitcoin ile)
 
-- Node.js 18.0+
-- Python 3.10+ (yerel test sunucusu için)
-- Cloudflare Wrangler CLI (`npm install -g wrangler`)
+FocusBot yıllık tek seferlik bir lisans gerektirir:
 
-```bash
-git clone https://github.com/YOUR_USERNAME/focus-bot.git
-cd focus-bot
-npm install
-```
+1. Herhangi bir web sayfasında yüzen butona tıklayın
+2. Panelden **Upgrade to Pro** butonuna tıklayın
+3. Gösterilen Bitcoin adresine gerekli satoshi miktarını gönderin
+4. İşlem ID'nizi (TXID) veya lisans anahtarını aktivasyon alanına yapıştırın
+5. **Activate** tıklayın — lisansınız 365 gün geçerlidir
 
-**Backend'i (Worker) Canlıya Alma**
+Fiyat **12 EUR/yıl** olarak sabitlenmiştir ve anlık Bitcoin kuruyla satoshi'ye dönüştürülür.
 
-```bash
-cd worker
-npx wrangler kv namespace create LICENSES
-# wrangler.toml dosyasına dönen ID'yi ve BTC_ADDRESS bilginizi ekleyin
-npx wrangler deploy
-```
+### Özellikler
 
-**İstemciyi Yerelde Çalıştırma**
-
-```bash
-cd ../client
-python -m http.server 5500
-```
-
-Tarayıcınızdan `http://localhost:5500` adresini açın.
-
-**Testleri Çalıştırma**
-
-```bash
-# Ana dizindeyken:
-node run-tests.js
-```
-
-### Güvenlik ve Uyumluluk
-
-| Katman | Uygulama |
-|---|---|
-| Kimlik Doğrulama | Sabit süreli kriptografik karşılaştırmalı Bearer token |
-| Hız Sınırlama | Cloudflare KV kayan pencere istek sınırlaması |
-| CORS Politikası | Açık origin beyaz listesi (ALLOWED_ORIGINS) |
-| İşlem Güvenliği | Çift harcamayı önleyen atomik `tx:<TXID>` kayıtları |
-| Tutar Denetimi | Anlık kur hedefine göre çoklu vout satoshi toplamı denetimi |
-
-### Yol Haritası
-
-- [x] Web Audio binaural frekans sentezleyicisi
-- [x] Cloudflare Worker lisanslama API'si
-- [x] 12€/yıl dinamik BTC dönüştürücü ve KV önbelleği
-- [x] Mempool.space blokzincir doğrulayıcısı
-- [x] Eksik bakiye (402) ve tekrar kullanım (409) kontrolleri
-- [x] 11/11 kapsamlı otomatik test paketi
-- [ ] Pomodoro entegrasyonlu dalga profilleri
-- [ ] WebGL/Canvas tabanlı gerçek zamanlı ses görselleştirici
-- [ ] Lightning Network (L402) anında ödeme desteği
+- **Gerçek zamanlı sentez** — ses dosyası yok, buffering yok, sıfır bant genişliği
+- **Sürüklenebilirtetikleyici** — butonu ekranda istediğiniz yere taşıyın (konumu hatırlar)
+- **Özel frekanslar** — sol/sağ osilatörleri 0.1–1000 Hz aralığında ayarlayın
+- **Ses yükseltme** — daha yüksek ses için ön amplifikasyon
+- **Her yerde çalışır** — content script ile her web sitesinde çalışır
+- **Koyu cam efektli arayüz** — minimal, rahatsız etmeyen tasarım
 
 ### Lisans
 
-Ticari Özel Mülkiyet Lisansı. Tüm hakları saklıdır. LICENSE dosyasına bakın.
+Ticari Özel Mülkiyet Lisansı. Tüm hakları saklıdır.
 
 ### Yasal Uyarı
 
-FOCUS-BOT bir odaklanma ve akustik modülasyon aracıdır. Tıbbi cihaz niteliği taşımaz; herhangi bir nörolojik veya psikiyatrik rahatsızlığı teşhis veya tedavi etme amacı taşımaz. Blokzincir transferleri geri döndürülemez; ödeme yapmadan önce transfer parametrelerinizi kontrol ediniz.
+FocusBot bir ses sentezleme ve verimlilik aracıdır. Tıbbi cihaz niteliği taşımaz; herhangi bir nörolojik veya psikiyatrik rahatsızlığı teşhis veya tedavi etme amacı taşımaz. Blokzincir transferleri geri döndürülemez; ödeme yapmadan önce transfer parametrelerinizi kontrol ediniz.
