@@ -1,0 +1,4 @@
+# Local development (npx wrangler dev) reads this file automatically.
+# NEVER commit real secrets to git!
+
+ADMIN_TOKEN=your-very-long-random-admin-token

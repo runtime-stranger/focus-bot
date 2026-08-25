@@ -1,0 +1,41 @@
+# ============================================================================
+# FocusBot API — Cloudflare Worker configuration
+# ============================================================================
+
+name = "focus-bot-api"
+main = "index.js"
+compatibility_date = "2026-07-15"
+
+# ---------------------------------------------------------------------------
+# KV Namespace: license records are stored here.
+# To create it:  npx wrangler kv namespace create LICENSES
+# Write the resulting "id" below.
+# ---------------------------------------------------------------------------
+[[kv_namespaces]]
+binding = "LICENSES"
+id = "b8ab14df7ac844a3b5ec6627f806b233"
+
+# ---------------------------------------------------------------------------
+# Public (non-secret) variables
+# ---------------------------------------------------------------------------
+[vars]
+# Sites where the widget will be embedded (comma-separated). "*" = allow all origins.
+ALLOWED_ORIGINS = "http://localhost:5500,http://127.0.0.1:5500,https://siteleriniz.com"
+# Automatic TXID verification (/api/verify-tx): the BTC address payments are
+# expected to go to — MUST match the client's CONFIG.btcAddress.
+BTC_ADDRESS = "125Fa6gWFWhfojvQcQyeGHpPQCcK3MyKsT"
+# Base price (in satoshis). 10000 sat = 0.0001 BTC. Optional.
+# MIN_PRICE_SATS = "10000"
+
+# ---------------------------------------------------------------------------
+# SECRET VARIABLES — never committed; defined via the terminal:
+#   npx wrangler secret put ADMIN_TOKEN   # long random token for /api/admin/grant
+#
+# PAYMENT FLOW (AUTOMATIC ON-CHAIN VERIFICATION):
+#   The customer sends BTC to BTC_ADDRESS and pastes the TXID into the widget;
+#   /api/verify-tx verifies the transaction via mempool.space and automatically
+#   issues the license. No manual approval required (admin/grant is still supported).
+#
+# For local development (wrangler dev): write them into a .dev.vars file
+# (template: .dev.vars.example)
+# ---------------------------------------------------------------------------
