@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FocusBot — Demo Page</title>
+  <style>
+    /* These styles DO NOT affect the widget (proof of Shadow DOM isolation):
+       we paint the body red; the widget still keeps its dark theme. */
+    body {
+      margin: 0; height: 100vh; display: grid; place-items: center;
+      font-family: system-ui, sans-serif;
+      background: #7f1d1d; color: #fee2e2; text-align: center;
+    }
+    code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>FocusBot Demo</h1>
+    <p>Click the button in the bottom-right corner to open the widget.</p>
+    <p>License test: while <code>npx wrangler dev</code> is running,
+       generate a key via <code>/api/admin/grant</code> and enter it in the panel.</p>
+  </main>
+
+  <!-- ================================================================
+       ONE-LINE INTEGRATION (as it looks on a real site):
+  <script src="https://cdn-yourdomain.com/focus-bot.js"
+          data-api-key="YOUR-SITE-KEY"
+          data-endpoint="https://focus-bot-api.yourname.workers.dev" defer></script>
+       ================================================================ -->
+  <script src="../client/focus-bot.js?v=3"
+          data-endpoint="http://localhost:8787"
+          data-api-key=""
+          data-brand="FocusBot"
+          defer></script>
+</body>
+</html>

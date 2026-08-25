@@ -1,0 +1,13 @@
+{
+  "name": "focus-bot",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "FocusBot - Binaural beats focus widget + Cloudflare Worker license API",
+  "scripts": {
+    "test": "node run-tests.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
