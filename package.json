@@ -1,11 +1,12 @@
 {
   "name": "focus-bot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
-  "description": "FocusBot - Binaural beats focus widget + Cloudflare Worker license API",
+  "description": "FocusBot - Autonomous Deep Work Suite & Neural Frequency Synthesizer (MV3 extension + Cloudflare Worker license API)",
   "scripts": {
-    "test": "node run-tests.js"
+    "test": "node run-tests.js",
+    "package": "node scripts/package.js"
   },
   "engines": {
     "node": ">=18"

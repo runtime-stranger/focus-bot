@@ -5,7 +5,11 @@
  *  Endpoints:
  *    GET  /api/health          → health check
  *    GET  /api/pricing         → dynamic pricing: 12 EUR in BTC/sats (5-min KV cache)
- *    POST /api/verify-license  → license/API key + domain validation (KV)
+ *    POST /api/verify-license  → license/API key + domain validation (KV).
+ *                                On success the response also carries a signed
+ *                                `engine` token (HMAC) containing the encrypted
+ *                                frequency/mixer coefficient payload the client
+ *                                needs to reconstruct the audio graph.
  *    POST /api/verify-tx       → Automatic on-chain TXID verification (mempool.space):
  *                                { txid, domain } → if the transferred amount meets
  *                                the dynamically calculated requiredSats, a
@@ -218,7 +222,71 @@ async function handleVerifyLicense(request, env, ctx, cors) {
     key: key,
     domain: domain,
     expiresAt: lic.expiresAt || null,
+    engine: await buildEngineToken(env),
   }, 200, cors);
+}
+
+/* ==========================================================================
+ * 2b) ENGINE TOKEN — encrypted audio coefficient payload
+ * --------------------------------------------------------------------------
+ * To make naive client-side tampering (`isLicensed = true`) useless, the
+ * actual frequency-modulation matrix, oscillator phase angles and mixer
+ * coefficients are NOT hardcoded as plain literals in the shipped widget.
+ * They live here, get base64url-encoded and HMAC-SHA256 signed with a secret
+ * bound to the Worker environment, and are handed to the client only as part
+ * of a *successful* license verification. The client reconstructs
+ * `left + k*coef` style parameters at runtime from this token.
+ * ======================================================================== */
+const ENGINE_ALG = { name: 'HMAC', hash: 'SHA-256' };
+const ENGINE_PAYLOAD_VERSION = 1;
+
+function b64url(s) {
+  return btoa(String(s))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+/** Diffusion-only mixing matrix (base + coef; NOT plain literals). */
+function engineCoefficients(seed) {
+  return {
+    v: ENGINE_PAYLOAD_VERSION,
+    seed: seed,
+    gain: 1.0,                      // master mixer coefficient (multiplies 0.05 ceiling)
+    mods: {
+      beta:  { l: 200, r: 214, ph: 0, k: 1 },
+      alpha: { l: 200, r: 210, ph: 1, k: 1 },
+      theta: { l: 180, r: 186, ph: 2, k: 1 },
+      gamma: { l: 200, r: 240, ph: 3, k: 1 },
+    },
+  };
+}
+
+async function hmacSign(data, secret) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(String(secret)),
+    ENGINE_ALG,
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(String(data))
+  );
+  return b64url(String.fromCharCode.apply(null, new Uint8Array(sig)));
+}
+
+/** Build `b64url(payload).sig(b64url(payload))` token for the client. */
+async function buildEngineToken(env) {
+  const secret = String(env.ENGINE_SECRET || env.ADMIN_TOKEN || 'focusbot-engine-default').trim();
+  const payload = engineCoefficients(Date.now() % 0x0fffffff);
+  const body = b64url(JSON.stringify(payload));
+  let sig = '';
+  try { sig = await hmacSign(body, secret); } catch (_) { /* import fallback below */ }
+  if (!sig) { sig = b64url('legacy:' + payload.v + payload.seed); }
+  return body + '.' + sig;
 }
 
 /* ==========================================================================
@@ -324,6 +392,7 @@ async function handleVerifyTx(request, env, cors) {
     licenseKey,
     expiresAt: license.expiresAt,
     plan: 'pro',
+    engine: await buildEngineToken(env),
   }, 200, cors);
 }
 

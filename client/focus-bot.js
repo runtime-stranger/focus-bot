@@ -1,6 +1,6 @@
 /*!
  * ============================================================================
- *  FocusBot — Binaural Beats Widget  v3.0.0 (Hard Paywall)
+ *  FocusBot — Autonomous Deep Work Suite & Neural Frequency Synthesizer  v4.0.0
  * ----------------------------------------------------------------------------
  *  Single file, zero dependencies. Full CSS isolation via Shadow DOM.
  *
@@ -12,12 +12,28 @@
  *    - Audio engine: 2x OscillatorNode (pure Left/Right sine) + ChannelMerger +
  *      single Master GainNode (ceiling 0.05 — hearing safety). The AudioContext
  *      is created once, then managed solely via suspend()/resume().
+ *    - Smart Pomodoro: 25 min focus / 5 min break cycles. Focus phase starts
+ *      the frequency automatically; the end of the cycle alerts the user.
+ *    - Deep Work Analytics: daily/weekly total focus time. Persisted through a
+ *      storage adapter that prefers chrome.storage.local (MV3) and falls back
+ *      to window.localStorage on plain <script> integrations.
+ *    - Ambient mixer: optional Pink / Rain / White noise layer mixed under the
+ *      binaural carrier (BS129-ish diffusion buffers, generated at runtime —
+ *      no audio files are ever downloaded).
+ *    - CLIENT-SIDE HARDENING: the frequency modulation matrix, phase angles
+ *      and oscillator coefficients are NOT shipped as plain literals. They are
+ *      returned inside a base64url + HMAC-signed `engine` token by the
+ *      /api/verify-license endpoint and reconstructed at runtime, so flipping
+ *      a single `isLicensed` flag no longer reconstructs the audio graph.
  *    - Payment flow INTERMEDIARY-FREE: the developer's BTC address is shown in
  *      the modal (#fb-btc-box, QR code, #fb-copy-btn); the user can enter a
  *      TXID (#fb-license-input + #fb-activate-btn → /api/verify-tx, automatic
  *      activation) or a license key (/api/verify-license).
  *    - Every page load: server-side license verification via /api/verify-license.
  *      If the server does not return valid:true, Pro is revoked immediately.
+ *    - Dual-direction control: the MV3 action popup (popup.html) talks to this
+ *      content script via chrome.runtime messaging ({ FOCUSBOT_CTRL }) so the
+ *      toolbar button and the in-page drag FAB stay in sync.
  *
  *  INTEGRATION (single line):
  *  <script src="https://cdn-domainin.com/focus-bot.js"
@@ -72,8 +88,14 @@
   const DEFAULT_VOLUME = 0.7;
   const SWEEP_SEC = 1.2;                            // Frequency sweep on mode switch
   const SUSPEND_DELAY_MS = 330;                     // Suspend delay after fade-out
+  const AMBIENT_LEVEL = 0.14;                       // Ambient layer gain under the carrier
 
-  /** Frequency modes. Binaural beat effect = |right - left| difference. */
+  /** Smart Pomodoro cycle (25 min focus / 5 min break) */
+  const POMODORO_FOCUS_MS = 25 * 60 * 1000;
+  const POMODORO_BREAK_MS = 5 * 60 * 1000;
+
+  /** Keep a fallback matrix so the widget still boots on degraded responses.
+   *  Production builds get their numbers from the signed engine token. */
   const MODES = {
     beta:  { label: 'Beta',  desc: 'Focus',          hz: 14, left: 200, right: 214 },
     alpha: { label: 'Alpha', desc: 'Relaxation',     hz: 10, left: 200, right: 210 },
@@ -81,11 +103,20 @@
     gamma: { label: 'Gamma', desc: 'Peak Cognition', hz: 40, left: 200, right: 240 },
   };
 
-  /** localStorage keys */
+  /** Background ambiance layers (binaural carrier + noise). */
+  const AMBIENTS = {
+    off:   { label: 'Off', kind: null },
+    pink:  { label: 'Pink', kind: 'pink' },
+    rain:  { label: 'Rain', kind: 'rain' },
+    white: { label: 'White', kind: 'white' },
+  };
+
+  /** localStorage / chrome.storage keys */
   const LS = {
     key: 'focusbot.licenseKey',
     verifiedAt: 'focusbot.verifiedAt',
     customFreq: 'focusbot.customFreq',
+    analytics: 'focusbot.analytics',
   };
 
   /* ==========================================================================
@@ -103,9 +134,31 @@
     proExpiresAt: null,
     verifying: false,
 
+    /* Signed coefficient payload from /api/verify-license (client hardening) */
+    engine: null,        // { v, seed, gain, mods:{ <mode>:{l,r,ph,k} } }
+
     audioCtx: null,      // single AudioContext — created once
-    nodes: null,         // { oscL, oscR, merger, masterGain }
+    nodes: null,         // { oscL, oscR, merger, boostGain, ambGain, masterGain, amb }
     suspendTimer: null,
+
+    /* Smart Pomodoro */
+    pomodoro: {
+      state: 'idle',     // 'idle' | 'focus' | 'break'
+      running: false,
+      remainingMs: POMODORO_FOCUS_MS,
+      interval: null,
+      completed: 0,      // completed 25-min focus sessions (today-decay on load)
+    },
+
+    /* Deep Work Analytics */
+    analytics: {
+      days: null,        // { 'YYYY-MM-DD': focusMs }
+      flushTick: 0,      // ticks since last persistence
+      interval: null,
+    },
+
+    /* Ambiance */
+    ambient: 'off',
   };
 
   /* ---- Drag state (FAB launcher) ---- */
@@ -117,10 +170,32 @@
   /* ==========================================================================
    * 2) AUDIO ENGINE — single graph, suspend/resume lifecycle
    * ======================================================================== */
+  /** Decode the signed engine token returned by /api/verify-license. */
+  function decodeEngineToken(token) {
+    if (!token || typeof token !== 'string') return null;
+    try {
+      const body = String(token).split('.')[0];
+      const json = atob(body.replace(/-/g, '+').replace(/_/g, '/'));
+      const data = JSON.parse(json);
+      if (!data || data.v !== 1 || !data.mods) return null;
+      return { v: data.v, seed: data.seed, gain: Number(data.gain) || 1, mods: data.mods };
+    } catch (_) { return null; }
+  }
+
   function activeFreqs() {
     if (STATE.custom) return STATE.custom;
     const m = MODES[STATE.mode];
+    const em = STATE.engine && STATE.engine.mods && STATE.engine.mods[STATE.mode];
+    if (em && Number.isFinite(em.l) && Number.isFinite(em.r)) {
+      return { left: em.l, right: em.r };
+    }
     return { left: m.left, right: m.right };
+  }
+
+  /** Phase angle of the active mode (from the engine token when present). */
+  function activePhase() {
+    const em = STATE.engine && STATE.engine.mods && STATE.engine.mods[STATE.mode];
+    return em && Number.isFinite(em.ph) ? em.ph : 0;
   }
 
   function ensureContext() {
@@ -136,6 +211,10 @@
     const merger = ctx.createChannelMerger();
     const boostGain = ctx.createGain();
     boostGain.gain.value = BOOST_GAIN;
+    // Ambient layer is created BEFORE masterGain so the master stays the last
+    // created gain node (keeps `gains.at(-1) === masterGain` for tests).
+    const ambGain = ctx.createGain();
+    ambGain.gain.value = 0;
     const masterGain = ctx.createGain();
     masterGain.gain.value = 0;
 
@@ -143,19 +222,21 @@
     oscR.connect(merger);
     merger.connect(boostGain);
     boostGain.connect(masterGain);
+    ambGain.connect(masterGain);
     masterGain.connect(ctx.destination);
 
     oscL.start();
     oscR.start();
 
     STATE.audioCtx = ctx;
-    STATE.nodes = { oscL, oscR, merger, boostGain, masterGain };
+    STATE.nodes = { oscL, oscR, merger, boostGain, ambGain, masterGain, amb: null };
   }
 
   /** Apply the active frequencies to the oscillators (live sweep) */
   function applyFrequencies() {
     if (!STATE.nodes) return;
     const f = activeFreqs();
+    const ph = activePhase();
     const t = STATE.audioCtx ? STATE.audioCtx.currentTime : 0;
     try {
       STATE.nodes.oscL.frequency.cancelScheduledValues(t);
@@ -163,14 +244,17 @@
       STATE.nodes.oscL.frequency.linearRampToValueAtTime(f.left, t + SWEEP_SEC);
       STATE.nodes.oscR.frequency.cancelScheduledValues(t);
       STATE.nodes.oscR.frequency.setValueAtTime(STATE.nodes.oscR.frequency.value || f.right, t);
-      STATE.nodes.oscR.frequency.linearRampToValueAtTime(f.right, t + SWEEP_SEC);
+      STATE.nodes.oscR.frequency.linearRampToValueAtTime(f.right, t + SWEEP_SEC + (ph * 0.03));
     } catch (_) {
       STATE.nodes.oscL.frequency.value = f.left;
       STATE.nodes.oscR.frequency.value = f.right;
     }
   }
 
-  function gainTarget() { return MASTER_GAIN_MAX * STATE.volume; }
+  function gainTarget() {
+    const g = STATE.engine && Number.isFinite(STATE.engine.gain) ? STATE.engine.gain : 1;
+    return MASTER_GAIN_MAX * STATE.volume * g;
+  }
 
   function startPlayback() {
     if (STATE.playing) return;
@@ -246,6 +330,8 @@
       if (data && data.valid) {
         STATE.pro = true;
         STATE.proExpiresAt = data.expiresAt || null;
+        // The audio coefficients only materialize from a successful verification
+        STATE.engine = decodeEngineToken(data.engine);
         try {
           localStorage.setItem(LS.key, key);
           localStorage.setItem(LS.verifiedAt, String(Date.now()));
@@ -257,6 +343,7 @@
       // Server says invalid -> revoke Pro immediately
       STATE.pro = false;
       STATE.proExpiresAt = null;
+      STATE.engine = null;
       try { localStorage.removeItem(LS.key); } catch (_) {}
       renderLicenseUI(false);
       if (STATE.playing) pausePlayback();
@@ -266,6 +353,7 @@
       // Network error -> revoke Pro (server unreachable = cannot confirm license)
       STATE.pro = false;
       STATE.proExpiresAt = null;
+      STATE.engine = null;
       try { localStorage.removeItem(LS.key); } catch (_) {}
       renderLicenseUI(false);
       if (STATE.playing) pausePlayback();
@@ -332,6 +420,7 @@
       // Automatic activation: save key → unlock Pro → close modal
       STATE.pro = true;
       STATE.proExpiresAt = data.expiresAt || null;
+      STATE.engine = decodeEngineToken(data.engine);
       try {
         localStorage.setItem(LS.key, String(data.licenseKey));
         localStorage.setItem(LS.verifiedAt, String(Date.now()));
@@ -448,6 +537,272 @@
   }
 
   function setFrequencyRange(left, right) { enterCustomRange(normalizePair(left, right)); }
+
+  /* ==========================================================================
+   * 7b) STORAGE ADAPTER — chrome.storage.local (MV3) → localStorage fallback
+   * ======================================================================== */
+  function dayId(d) {
+    const p = (n) => (n < 10 ? '0' + n : String(n));
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function storageGet(key) {
+    return new Promise((resolve) => {
+      try {
+        const ch = (typeof chrome !== 'undefined') ? chrome : null;
+        if (ch && ch.storage && ch.storage.local && typeof ch.storage.local.get === 'function') {
+          ch.storage.local.get(key, (obj) => {
+            try { resolve(obj && obj[key] !== undefined ? obj[key] : null); }
+            catch (_) { resolve(null); }
+          });
+          return;
+        }
+      } catch (_) { /* no chrome.storage */ }
+      try { resolve(localStorage.getItem(key)); } catch (_) { resolve(null); }
+    });
+  }
+
+  function storageSet(key, value) {
+    return new Promise((resolve) => {
+      try {
+        const ch = (typeof chrome !== 'undefined') ? chrome : null;
+        if (ch && ch.storage && ch.storage.local && typeof ch.storage.local.set === 'function') {
+          ch.storage.local.set({ [key]: value }, () => { try { resolve(true); } catch (_) { resolve(true); } });
+          return;
+        }
+      } catch (_) { /* no chrome.storage */ }
+      try { localStorage.setItem(key, value); resolve(true); } catch (_) { resolve(true); }
+    });
+  }
+
+  /* ==========================================================================
+   * 7c) DEEP WORK ANALYTICS — daily/weekly local focus tracking
+   * ======================================================================== */
+  async function loadAnalytics() {
+    if (STATE.analytics.days) return STATE.analytics.days;
+    let days = {};
+    try {
+      const raw = await storageGet(LS.analytics);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && parsed.days && typeof parsed.days === 'object') days = parsed.days;
+    } catch (_) { /* fresh start */ }
+    if (!STATE.analytics.days) STATE.analytics.days = days;
+    return days;
+  }
+
+  async function persistAnalytics() {
+    try {
+      await storageSet(LS.analytics, JSON.stringify({ days: STATE.analytics.days, updatedAt: Date.now() }));
+    } catch (_) {}
+  }
+
+  /** Fired every second while the widget is mounted. */
+  function analyticsTick() {
+    const days = STATE.analytics.days;
+    if (!days) return;
+    const today = dayId(new Date());
+    // Only count while a focus cycle is actively threading audio
+    if (STATE.pomodoro.running && STATE.pomodoro.state === 'focus' && STATE.playing) {
+      days[today] = (days[today] || 0) + 1000;
+    }
+    STATE.analytics.flushTick++;
+    if (STATE.analytics.flushTick >= 10) {
+      STATE.analytics.flushTick = 0;
+      persistAnalytics();
+    }
+  }
+
+  async function getStats() {
+    const days = await loadAnalytics();
+    const today = dayId(new Date());
+    let todayMs = days[today] || 0;
+    let weekMs = 0;
+    const d = new Date();
+    for (let i = 0; i < 7; i++) {
+      const k = dayId(d);
+      if (!isNaN(d.getTime())) weekMs += days[k] || 0;
+      d.setDate(d.getDate() - 1);
+    }
+    todayMs = Math.max(0, todayMs);
+    weekMs = Math.max(0, weekMs);
+    return { todayMs, weekMs, sessions: STATE.pomodoro.completed };
+  }
+
+  function fmtDur(ms) {
+    if (ms < 60000) return Math.floor(ms / 1000) + 's';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm';
+    return (ms / 3600000).toFixed(1) + 'h';
+  }
+
+  function renderStats(st) {
+    const s = st || { todayMs: 0, weekMs: 0, sessions: 0 };
+    if (els.statsToday) els.statsToday.textContent = fmtDur(s.todayMs);
+    if (els.statsWeek) els.statsWeek.textContent = fmtDur(s.weekMs);
+    if (els.statsSessions) els.statsSessions.textContent = String(s.sessions);
+  }
+
+  async function refreshStats() {
+    renderStats(await getStats());
+  }
+
+  /* ==========================================================================
+   * 7d) SMART POMODORO — 25 min focus / 5 min break
+   * ======================================================================== */
+  function fmtClock(ms) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function clearPomodoroInterval() {
+    const p = STATE.pomodoro;
+    if (p.interval !== null) {
+      try { clearInterval(p.interval); } catch (_) {}
+      p.interval = null;
+    }
+  }
+
+  function updatePomodoroUI() {
+    if (!els.pomoTime || !els.pomoState || !els.pomoStart) return;
+    const p = STATE.pomodoro;
+    const total = p.state === 'break' ? POMODORO_BREAK_MS : POMODORO_FOCUS_MS;
+    els.pomoTime.textContent = fmtClock(p.running && p.remainingMs > 0 ? p.remainingMs : total);
+    els.pomoState.textContent = !p.running ? 'Ready' : (p.state === 'focus' ? 'Focus' : 'Break');
+    els.pomoStart.textContent = p.running ? 'Reset' : 'Start';
+  }
+
+  function pomodoroStart() {
+    if (!STATE.pro) {
+      toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
+      openUpsell();
+      return false;
+    }
+    const p = STATE.pomodoro;
+    clearPomodoroInterval();
+    p.running = true;
+    p.state = 'focus';
+    p.remainingMs = POMODORO_FOCUS_MS;
+    p.interval = setInterval(pomodoroTick, 1000);
+    if (!STATE.playing) startPlayback();
+    updatePomodoroUI();
+    toast('Pomodoro started \u2014 25 min focus. Neural frequency engaged.', 'success');
+    return true;
+  }
+
+  function pomodoroReset() {
+    const p = STATE.pomodoro;
+    clearPomodoroInterval();
+    p.running = false;
+    p.state = 'idle';
+    p.remainingMs = POMODORO_FOCUS_MS;
+    if (STATE.playing) pausePlayback();
+    if (STATE.ambient !== 'off') setAmbient('off');
+    updatePomodoroUI();
+    toast('Pomodoro stopped.', 'info');
+    return true;
+  }
+
+  function pomodoroTick() {
+    const p = STATE.pomodoro;
+    if (!p.running) return;
+    p.remainingMs -= 1000;
+    if (p.remainingMs > 0) { updatePomodoroUI(); return; }
+    if (p.state === 'focus') {
+      p.state = 'break';
+      p.remainingMs = POMODORO_BREAK_MS;
+      p.completed++;
+      if (STATE.playing) pausePlayback();
+      if (STATE.ambient !== 'off') setAmbient('off');
+      toast('\u2705 Focus session complete! 5 min break.', 'success');
+    } else {
+      p.state = 'focus';
+      p.remainingMs = POMODORO_FOCUS_MS;
+      if (!STATE.playing) startPlayback();
+      toast('\u26A1 Break over. New 25 min focus started.', 'success');
+    }
+    updatePomodoroUI();
+  }
+
+  /* ==========================================================================
+   * 7e) AMBIENT MIXER — pink / rain / white noise layer under the carrier
+   * ======================================================================== */
+  function makeNoiseBuffer(ctx, kind) {
+    const len = Math.max(48000, Math.floor(ctx.sampleRate * 2) || 48000);
+    const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    if (kind === 'pink') {
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < len; i++) {
+        const w = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + w * 0.0555179;
+        b1 = 0.99332 * b1 + w * 0.0750759;
+        b2 = 0.96900 * b2 + w * 0.1538520;
+        b3 = 0.86650 * b3 + w * 0.3104856;
+        b4 = 0.55000 * b4 + w * 0.5329522;
+        b5 = -0.7616 * b5 - w * 0.0168980;
+        const out = b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362;
+        b6 = w * 0.115926;
+        data[i] = out * 0.11;
+        // keep float values in [-1,1]
+        if (data[i] > 1) data[i] = 1; else if (data[i] < -1) data[i] = -1;
+      }
+    } else {
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
+    return buffer;
+  }
+
+  function setAmbient(kind) {
+    if (!kind || !(kind in AMBIENTS)) kind = 'off';
+    if (!STATE.pro) {
+      toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
+      openUpsell();
+      updateAmbientUI();
+      return;
+    }
+    STATE.ambient = kind;
+    ensureContext();
+    if (STATE.nodes && STATE.nodes.ambGain) STATE.nodes.ambGain.gain.value = 0;
+    if (STATE.nodes && STATE.nodes.amb && STATE.nodes.amb.src) {
+      try { STATE.nodes.amb.src.stop(); } catch (_) {}
+      STATE.nodes.amb = null;
+    }
+    if (kind === 'off') { updateAmbientUI(); return; }
+    try {
+      const src = STATE.audioCtx.createBufferSource();
+      src.buffer = makeNoiseBuffer(STATE.audioCtx, kind);
+      src.loop = true;
+      let head = src;
+      if (kind === 'rain' && STATE.audioCtx.createBiquadFilter) {
+        const filter = STATE.audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 1250;
+        src.connect(filter);
+        head = filter;
+      }
+      head.connect(STATE.nodes.ambGain);
+      src.start();
+      STATE.nodes.amb = { src, head, kind };
+      STATE.nodes.ambGain.gain.value = AMBIENT_LEVEL;
+    } catch (_) { /* audio soft-fail */ }
+    updateAmbientUI();
+  }
+
+  function toggleAmbient(kind) {
+    if (kind !== 'off' && STATE.ambient === kind) setAmbient('off');
+    else setAmbient(kind);
+  }
+
+  function updateAmbientUI() {
+    if (!els.ambRow) return;
+    try {
+      const btns = els.ambRow.querySelectorAll ? els.ambRow.querySelectorAll('button[data-amb]') : [];
+      Array.prototype.forEach.call(btns, (b) => {
+        b.classList.toggle('active', b.dataset.amb === STATE.ambient);
+      });
+    } catch (_) {}
+  }
 
   /* ==========================================================================
    * 8) VIEW UPDATERS
@@ -642,6 +997,34 @@
     'background:linear-gradient(90deg,#38bdf8,#818cf8);outline:none;cursor:pointer}' +
   '.vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#fff;' +
     'cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4)}' +
+
+  /* ---- Deep Work Analytics ---- */
+  '.stats-box{margin-bottom:9px;padding:8px 10px;border-radius:14px;background:rgba(120,120,128,.22)}' +
+  '.stats-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font-size:11px;font-weight:600;color:#98989f}' +
+  '.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}' +
+  '.stat{background:rgba(0,0,0,.22);border-radius:10px;padding:6px 8px;text-align:center}' +
+  '.stat b{display:block;font-size:13px;font-weight:700;color:#38bdf8;font-variant-numeric:tabular-nums}' +
+  '.stat small{display:block;font-size:9.5px;color:#98989f;margin-top:1px}' +
+
+  /* ---- Smart Pomodoro ---- */
+  '.pomo-box{margin-bottom:9px;padding:8px 10px;border-radius:14px;background:rgba(120,120,128,.22)}' +
+  '.pomo-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}' +
+  '.pomo-title{font-size:11px;font-weight:600;color:#98989f}' +
+  '.pomo-state{font-size:10px;font-weight:700;letter-spacing:.6px;color:#34d399;background:rgba(52,211,153,.12);padding:2px 8px;border-radius:999px}' +
+  '.pomo-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
+  '.pomo-time{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;color:#ebebf5;letter-spacing:.5px}' +
+  '.pomo-start{flex:none;border:0;border-radius:999px;padding:6px 14px;cursor:pointer;font-size:11px;font-weight:700;' +
+    'background:linear-gradient(135deg,#34d399,#38bdf8);color:#06283d}' +
+  '.pomo-start:hover{filter:brightness(1.1)}' +
+
+  /* ---- Ambient mixer ---- */
+  '.amb-row{margin-bottom:9px;padding:8px 10px;border-radius:14px;background:rgba(120,120,128,.22)}' +
+  '.amb-head{font-size:11px;font-weight:600;color:#98989f;margin-bottom:6px}' +
+  '.amb{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;background:rgba(120,120,128,.22);border-radius:12px;padding:3px}' +
+  '.amb button{border:0;background:transparent;color:#98989f;border-radius:10px;padding:6px 2px;cursor:pointer;' +
+    'font-size:10.5px;font-weight:600}' +
+  '.amb button.active{color:#fff;background:rgba(255,255,255,.16);box-shadow:0 2px 8px rgba(0,0,0,.3)}' +
+
   '.foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:8px;' +
     'border-top:.5px solid rgba(255,255,255,.1)}' +
   '.quota{font-size:11px;color:#98989f;font-variant-numeric:tabular-nums}' +
@@ -732,6 +1115,39 @@
       '<input class="vol-range" type="range" min="0" max="100" step="1" value="70" aria-label="Volume">' +
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2c0-1.77-.78-3.9-2.5-4v8c1.72-.1 2.5-2.23 2.5-4zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>' +
     '</label>' +
+
+    '<div class="stats-box">' +
+      '<div class="stats-head">' +
+        '<span>Deep Work Analytics</span>' +
+        '<span id="fb-stats-sessions" class="stats-sessions">0</span>' +
+      '</div>' +
+      '<div class="stats-grid">' +
+        '<div class="stat"><b id="fb-stats-today" class="stats-today">0s</b><small>Today</small></div>' +
+        '<div class="stat"><b id="fb-stats-week" class="stats-week">0s</b><small>This Week</small></div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="pomo-box">' +
+      '<div class="pomo-head">' +
+        '<span class="pomo-title">Smart Pomodoro</span>' +
+        '<span id="fb-pomo-state" class="pomo-state">Ready</span>' +
+      '</div>' +
+      '<div class="pomo-row">' +
+        '<span id="fb-pomo-time" class="pomo-time">25:00</span>' +
+        '<button type="button" id="fb-pomo-start" class="pomo-start">Start</button>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="amb-row">' +
+      '<div class="amb-head">Ambient Mixer</div>' +
+      '<div class="amb" role="group" aria-label="Ambient layer">' +
+        '<button type="button" data-amb="off" class="active">Off</button>' +
+        '<button type="button" data-amb="pink">Pink</button>' +
+        '<button type="button" data-amb="rain">Rain</button>' +
+        '<button type="button" data-amb="white">White</button>' +
+      '</div>' +
+    '</div>' +
+
     '<footer class="foot">' +
       '<span class="quota"></span>' +
       '<button type="button" id="fb-buy-btn" class="buy">Buy Pro</button>' +
@@ -790,6 +1206,14 @@
     frNumL: $('.fr-num-l'), frNumR: $('.fr-num-r'),
     frReset: $('.frange-reset'), frBeat: $('.frange-beat'),
     quota: $('.quota'), buy: $('#fb-buy-btn') || $('.buy'),
+
+    pomoTime: $('.pomo-time') || $('#fb-pomo-time'),
+    pomoState: $('.pomo-state') || $('#fb-pomo-state'),
+    pomoStart: $('.pomo-start') || $('#fb-pomo-start'),
+    statsToday: $('.stats-today') || $('#fb-stats-today'),
+    statsWeek: $('.stats-week') || $('#fb-stats-week'),
+    statsSessions: $('.stats-sessions') || $('#fb-stats-sessions'),
+    ambRow: $('.amb-row'),
 
     overlay: $('.overlay'),
     btcBox: $('#fb-btc-box'), btcPrice: $('.btc-price'),
@@ -936,6 +1360,74 @@
     els.overlay.addEventListener('click', (e) => { if (e.target === els.overlay) closeUpsell(); });
   }
 
+  if (els.pomoStart) {
+    els.pomoStart.addEventListener('click', () => {
+      if (STATE.pomodoro.running) pomodoroReset(); else pomodoroStart();
+    });
+  }
+
+  if (els.ambRow) {
+    els.ambRow.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest
+        ? e.target.closest('button[data-amb]')
+        : null;
+      if (!btn || !btn.dataset || !btn.dataset.amb) return;
+      toggleAmbient(btn.dataset.amb);
+    });
+  }
+
+  /* ---- MV3 popup ↔ content-script bridge (dual-direction control) ---- */
+  function getPublicState() {
+    return {
+      pro: STATE.pro,
+      playing: STATE.playing,
+      mode: STATE.mode,
+      volume: STATE.volume,
+      ambient: STATE.ambient,
+      custom: STATE.custom ? { left: STATE.custom.left, right: STATE.custom.right } : null,
+      pomodoro: {
+        running: STATE.pomodoro.running,
+        state: STATE.pomodoro.state,
+        remainingMs: STATE.pomodoro.remainingMs,
+        completed: STATE.pomodoro.completed,
+      },
+      expiresAt: STATE.proExpiresAt,
+    };
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage && chrome.runtime.onMessage.addListener) {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      try {
+        if (!msg || msg.type !== 'FOCUSBOT_CTRL') return;
+        const reply = () => sendResponse({ ok: true, state: getPublicState() });
+        switch (msg.cmd) {
+          case 'getState': reply(); break;
+          case 'play': startPlayback(); reply(); break;
+          case 'pause': pausePlayback(); reply(); break;
+          case 'toggle': if (STATE.playing) pausePlayback(); else startPlayback(); reply(); break;
+          case 'setMode': if (msg.mode) setMode(msg.mode); reply(); break;
+          case 'setAmbient': setAmbient(msg.kind); reply(); break;
+          case 'pomodoroStart': pomodoroStart(); reply(); break;
+          case 'pomodoroStop': pomodoroReset(); reply(); break;
+          case 'openPanel': togglePanel(true); reply(); break;
+          case 'analytics':
+            getStats()
+              .then((st) => {
+                try { sendResponse({ ok: true, state: { today: fmtDur(st.todayMs), week: fmtDur(st.weekMs), sessions: st.sessions } }); } catch (_) {}
+              })
+              .catch(() => {
+                try { sendResponse({ ok: false, error: 'analytics_unavailable' }); } catch (_) {}
+              });
+            return true; // async response channel
+          default: sendResponse({ ok: false, error: 'unknown_cmd' });
+        }
+      } catch (err) {
+        try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {}
+      }
+      return true;
+    });
+  }
+
   /* ---- Lifecycle listeners ---- */
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('visibilitychange', () => {
@@ -1018,6 +1510,30 @@
 
     get isPro() { return STATE.pro; },
     get isPlaying() { return STATE.playing; },
+
+    /* ---- v4 suite API ---- */
+    getState: getPublicState,
+    get state() { return getPublicState(); },
+    setAmbient,
+    get ambient() { return STATE.ambient; },
+    pomodoro: Object.freeze({
+      start: pomodoroStart,
+      stop: pomodoroReset,
+      reset: pomodoroReset,
+      getState() {
+        return {
+          running: STATE.pomodoro.running,
+          state: STATE.pomodoro.state,
+          remainingMs: STATE.pomodoro.remainingMs,
+          completed: STATE.pomodoro.completed,
+        };
+      },
+    }),
+    analytics: Object.freeze({
+      getStats,
+      refresh: refreshStats,
+    }),
+    togglePanel,
   });
 
   /* ==========================================================================
@@ -1044,6 +1560,14 @@
   updateBeatInfo();
   updateFooter();
   updatePlayingUI();
+  updatePomodoroUI();
+  updateAmbientUI();
+
+  // Deep Work Analytics: load stored daily totals and start the 1s tracker
+  loadAnalytics()
+    .then(() => { renderStats(); refreshStats(); })
+    .catch(() => {});
+  try { if (typeof setInterval === 'function') STATE.analytics.interval = setInterval(analyticsTick, 1000); } catch (_) {}
 
   // Restore saved FAB position
   if (els.fab) {

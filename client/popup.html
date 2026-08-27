@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FocusBot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0e0f16;
+      --surf: #171a24;
+      --line: rgba(255,255,255,.1);
+      --text: #e8eaf2;
+      --muted: #8a8f9e;
+      --acc: #38bdf8;
+      --acc2: #818cf8;
+      --green: #34d399;
+    }
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      padding: 14px 14px 16px;
+    }
+    header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #565b6e; }
+    .dot.on { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,.9); }
+    h1 { font-size: 14px; font-weight: 700; flex: 1; }
+    .pro-chip { font-size: 10px; font-weight: 800; letter-spacing: .8px; color: #06283d;
+      background: linear-gradient(90deg, var(--acc), var(--acc2)); padding: 3px 8px; border-radius: 999px; }
+    .row { display: flex; gap: 6px; margin-bottom: 8px; }
+    .btn { flex: 1; border: 1px solid var(--line); background: var(--surf); color: var(--text);
+      border-radius: 10px; padding: 9px 0; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .btn:hover { border-color: rgba(56,189,248,.5); }
+    .btn.primary { background: linear-gradient(135deg, var(--acc), var(--acc2)); border: 0; color: #06283d; }
+    .btn.active { border-color: var(--acc); color: var(--acc); }
+    .btns4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 8px; }
+    .modes .btn { font-size: 11px; padding: 7px 0; }
+    label { display: block; font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--muted); margin: 10px 0 5px; }
+    .status { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+    .status b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .note { font-size: 11px; color: var(--muted); text-align: center; padding: 12px 0 2px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>FocusBot</h1>
+    <span class="pro-chip" id="pro-chip">PRO</span>
+  </header>
+
+  <div class="row">
+    <button class="btn primary" id="btn-play">▶ Play</button>
+    <button class="btn primary" id="btn-pause">⏸ Pause</button>
+  </div>
+
+  <label>Mode</label>
+  <div class="btns4 modes" id="modes">
+    <button class="btn" data-mode="beta">Beta</button>
+    <button class="btn" data-mode="alpha">Alpha</button>
+    <button class="btn" data-mode="theta">Theta</button>
+    <button class="btn" data-mode="gamma">Gamma</button>
+  </div>
+
+  <label>Ambience</label>
+  <div class="btns4" id="amb">
+    <button class="btn" data-amb="off">Off</button>
+    <button class="btn" data-amb="pink">Pink</button>
+    <button class="btn" data-amb="rain">Rain</button>
+    <button class="btn" data-amb="white">White</button>
+  </div>
+
+  <label>Pomodoro</label>
+  <div class="row">
+    <button class="btn" id="btn-pomo">▶ Start</button>
+    <button class="btn" id="btn-pomo-stop">■ Reset</button>
+  </div>
+
+  <div class="status"><span>State</span><b id="st-state">—</b></div>
+  <div class="status"><span>Timer</span><b id="st-time">—</b></div>
+  <div class="status"><span>Today</span><b id="st-today">—</b></div>
+  <div class="status"><span>Week</span><b id="st-week">—</b></div>
+
+  <div class="note hidden" id="no-widget">FocusBot widget not detected on this page.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

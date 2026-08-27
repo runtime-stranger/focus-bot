@@ -27,6 +27,19 @@
  *   [SCENARIO C12] Client: network error → toast, no crash, widget stays usable
  *   [SCENARIO C13] Client: XSS/injection in license input is safely rejected
  *   [SCENARIO C14] Client: empty/whitespace input → validation toast, no API call
+ *   [SCENARIO 18-24] E2E hard-paywall guard: zero-bypass delivery, console attacks,
+ *                   expired license, network-fail revoke, cross-tab revocation,
+ *                   payment success (TXID → license → Pro → audio)
+ *   [SCENARIO 25-28] Engine math: beta/alpha/theta/gamma Left/Right matrix + gain ceiling
+ *   [SCENARIO 29-32] Smart Pomodoro: start/auto-play, 25-min focus → break (audio pause),
+ *                   break → next focus (auto-resume), reset
+ *   [SCENARIO 33-34] Deep Work Analytics: focus-time accumulation + persistence,
+ *                   chrome.storage.local preferred path (MV3)
+ *   [SCENARIO 35-36] Ambient mixer: white/pink noise buffers + rain lowpass routing,
+ *                   ambient gain below the carrier, master keeps last gain node
+ *   [SCENARIO 37-38] Hardening: signed engine token drives frequency matrix + gain;
+ *                   corrupt token → safe fallback matrix
+ *   [SCENARIO 39] Messaging bridge: chrome.runtime FOCUSBOT_CTRL (MV3 popup) → widget
  *
  *  Test infrastructure:
  *   - Mock Cloudflare KV (Map-based, put() call log + TTL record)
@@ -348,7 +361,15 @@ class MockAudioContext {
   static instances = [];
   static oscs = [];
   static gains = [];
-  static resetStatics() { MockAudioContext.instances = []; MockAudioContext.oscs = []; MockAudioContext.gains = []; }
+  static sources = [];
+  static buffers = [];
+  static resetStatics() {
+    MockAudioContext.instances = [];
+    MockAudioContext.oscs = [];
+    MockAudioContext.gains = [];
+    MockAudioContext.sources = [];
+    MockAudioContext.buffers = [];
+  }
 
   constructor() {
     MockAudioContext.instances.push(this);
@@ -363,6 +384,33 @@ class MockAudioContext {
   createOscillator() { const o = new MockOscillator(this); MockAudioContext.oscs.push(o); return o; }
   createGain() { const g = new MockGain(this); MockAudioContext.gains.push(g); return g; }
   createChannelMerger() { return new MockMerger(this); }
+  createBuffer(channels, length, sampleRate) {
+    const b = {
+      numberOfChannels: channels, length, sampleRate, channels: [],
+      getChannelData(i) { if (!this.channels[i]) this.channels[i] = new Float32Array(length); return this.channels[i]; },
+    };
+    MockAudioContext.buffers.push(b);
+    return b;
+  }
+  createBufferSource() {
+    const s = {
+      buffer: null, loop: false, connections: [], _started: false, _stopped: false,
+      connect(d) { this.connections.push(d); return d; },
+      disconnect() { this.connections.length = 0; },
+      start() { this._started = true; },
+      stop() { this._stopped = true; },
+    };
+    MockAudioContext.sources.push(s);
+    return s;
+  }
+  createBiquadFilter() {
+    const f = {
+      type: '', frequency: { value: 0 }, Q: { value: 0 }, connections: [],
+      connect(d) { this.connections.push(d); return d; },
+      disconnect() { this.connections.length = 0; },
+    };
+    return f;
+  }
 }
 
 /** Global env setup: window/document/localStorage/... shims + restore */
@@ -507,6 +555,13 @@ async function workerScenarios() {
       const vbody = await res.json();
       expectEqual(vbody.valid, true, 'valid flag');
       expectEqual(vbody.plan, 'pro', 'plan');
+      // Signed engine token (client-side hardening payload)
+      expectTrue(typeof vbody.engine === 'string' && vbody.engine.includes('.'), 'engine token present & signed');
+      const eng = JSON.parse(atob(vbody.engine.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+      expectEqual(eng.v, 1, 'engine payload version');
+      expectEqual(eng.mods.beta.r, 214, 'engine embeds beta matrix right');
+      expectEqual(eng.gain, 1, 'engine master coefficient');
+      expectTrue(Number.isFinite(eng.seed), 'engine carries a seed');
 
       // Wildcard '*' → valid on every domain
       res = await postJSON(env, '/api/verify-license', { apiKey: key2, domain: 'random-site.org' });
@@ -614,6 +669,7 @@ async function workerScenarios() {
         expectMatch(body.licenseKey, /^FOCUS-PRO-[A-HJKMNP-Z2-9]{8}$/, 'license key format');
         expectTrue(body.expiresAt > Date.now() + 364 * 86400000, 'expiresAt ~365 days out');
         expectTrue(body.expiresAt <= Date.now() + 366 * 86400000, 'expiresAt not too far');
+        expectTrue(typeof body.engine === 'string' && body.engine.includes('.'), 'TX activation also issues engine token');
 
         // Is the single-use lock in KV?
         const lockRaw = await kv.get('tx:' + VALID_TXID);
@@ -1216,8 +1272,530 @@ async function clientEdgeCaseScenarios() {
 }
 
 /* ===========================================================================
- * MAIN FLOW
+ * SCENARIO 18-24 : E2E HARD PAYWALL GUARD (zero-bypass verification)
  * ======================================================================== */
+async function e2ePaywallGuardScenarios() {
+  const env = installClientEnv();
+  try {
+
+    /* ---- SCENARIO 18 ---- */
+    await scenario('18. Empty storage: AudioContext null, oscillators never created', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+
+      // Verify state at boot
+      expectEqual(fb.isPlaying, false, 'not playing at boot');
+      expectEqual(MockAudioContext.instances.length, 0, 'AudioContext count = 0 at boot');
+
+      // Attempt all entry points — none should create AudioContext
+      fb.play();
+      fb.toggle();
+      fb.setMode('beta');
+      fb.setMode('alpha');
+      fb.setMode('theta');
+      fb.setMode('gamma');
+      fb.setVolume(100);
+      await sleep(30);
+
+      expectEqual(MockAudioContext.instances.length, 0, 'AudioContext still 0 after all bypass attempts');
+      expectEqual(fb.isPlaying, false, 'still not playing');
+    });
+
+    /* ---- SCENARIO 19 ---- */
+    await scenario('19. UI blocks: play/mode/freq all open payment modal', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+
+      // Play -> modal opens
+      fb.play();
+      await sleep(20);
+      expectEqual(c.stub('.overlay').hidden, false, 'play -> upsell modal opened');
+
+      // Close, then setMode -> modal opens
+      c.stub('.overlay').hidden = true;
+      c.stub('.overlay').classList.add('hidden');
+      fb.setMode('alpha');
+      await sleep(20);
+      expectEqual(c.stub('.overlay').hidden, false, 'setMode -> upsell modal opened');
+
+      // Close, then setFrequencyRange -> modal opens
+      c.stub('.overlay').hidden = true;
+      c.stub('.overlay').classList.add('hidden');
+      fb.setFrequencyRange(100, 200);
+      await sleep(20);
+      expectEqual(c.stub('.overlay').hidden, false, 'setFrequencyRange -> upsell modal opened');
+    });
+
+    /* ---- SCENARIO 20 ---- */
+    await scenario('20. Console attack: window.FocusBot.play() blocked without license', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+
+      // Simulate console attack: direct play() call
+      c.FocusBot.play();
+      await sleep(20);
+      expectEqual(c.FocusBot.isPlaying, false, 'console play() blocked');
+      expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext from console attack');
+
+      // Simulate: set isPlaying = true directly (should not affect internal state)
+      // The internal guard checks STATE.pro, not the public getter
+      c.FocusBot.play();
+      expectEqual(c.FocusBot.isPlaying, false, 'isPlaying still false after guard');
+    });
+
+    /* ---- SCENARIO 21 ---- */
+    await scenario('21. Expired license: bootVerify revokes pro, falls back to paywall', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-EXPIRED');
+      // Server says: invalid/expired
+      env.G.fetch = async (url) => {
+        if (String(url).includes('/api/verify-license')) {
+          return { ok: true, status: 200, json: async () => ({ valid: false, reason: 'expired' }) };
+        }
+        throw new Error('unexpected');
+      };
+      const c = await freshClient(env);
+      await sleep(30);
+
+      expectEqual(c.FocusBot.isPro, false, 'pro revoked for expired license');
+      expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext created');
+      // Play should open modal
+      c.FocusBot.play();
+      await sleep(20);
+      expectEqual(c.stub('.overlay').hidden, false, 'upsell opened after expired license');
+    });
+
+    /* ---- SCENARIO 22 ---- */
+    await scenario('22. Network failure at boot: revoke pro, widget stays usable', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-NETWORK');
+      env.G.fetch = async () => { throw new TypeError('Network failure'); };
+      const c = await freshClient(env);
+      await sleep(30);
+
+      expectEqual(c.FocusBot.isPro, false, 'pro revoked on network failure');
+      // Widget must not crash
+      expectEqual(typeof c.FocusBot.play, 'function', 'play still callable');
+      expectEqual(typeof c.FocusBot.toggle, 'function', 'toggle still callable');
+      expectEqual(typeof c.FocusBot.setMode, 'function', 'setMode still callable');
+    });
+
+    /* ---- SCENARIO 23 ---- */
+    await scenario('23. Cross-tab: storage event revokes pro in live tab', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-CROSSTAB');
+      env.G.fetch = async (url) => {
+        if (String(url).includes('/api/verify-license')) {
+          return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+        }
+        throw new Error('unexpected');
+      };
+      const c = await freshClient(env);
+      await sleep(30);
+      expectEqual(c.FocusBot.isPro, true, 'pro activated');
+
+      // Start playing
+      c.FocusBot.play();
+      await waitFor(() => c.FocusBot.isPlaying, 2000, 'playing');
+
+      // Simulate another tab removing the license key
+      env.ls.removeItem('focusbot.licenseKey');
+      // Fire the storage event listeners
+      const storageListeners = env.winL.storage || [];
+      for (const fn of storageListeners) {
+        fn({ key: 'focusbot.licenseKey', newValue: null });
+      }
+      await sleep(20);
+
+      expectEqual(c.FocusBot.isPro, false, 'pro revoked by cross-tab storage event');
+    });
+
+    /* ---- SCENARIO 24 ---- */
+    await scenario('24. Payment success: TXID -> 365-day license -> Pro active -> play works', async () => {
+      env.ls._clear();
+      // Simulate successful activation via applyLicense
+      env.G.fetch = async (url) => {
+        if (String(url).includes('/api/verify-license')) {
+          return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+        }
+        throw new Error('unexpected');
+      };
+      const c = await freshClient(env);
+
+      // Manually trigger activation (simulating user entering TXID)
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-E2E-PAYMENT');
+      // Re-boot to pick up the key
+      const c2 = await freshClient(env);
+      await sleep(30);
+
+      expectEqual(c2.FocusBot.isPro, true, 'Pro activated after payment');
+      const storedKey = env.ls.getItem('focusbot.licenseKey');
+      expectEqual(storedKey, 'FOCUS-PRO-E2E-PAYMENT', 'licenseKey stored in localStorage');
+
+      // Play should now work
+      c2.FocusBot.play();
+      await waitFor(() => c2.FocusBot.isPlaying, 2000, 'play after payment');
+      expectTrue(MockAudioContext.instances.length >= 1, 'AudioContext created after payment');
+    });
+  } finally {
+    env.restore();
+  }
+}
+
+/* ===========================================================================
+ * SCENARIO 25-28 : AUDIO SYNTHESIZER FREQUENCY MATH
+ * ======================================================================== */
+async function audioSynthScenarios() {
+  const env = installClientEnv();
+  try {
+    env.ls._clear();
+    env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-AUDIO');
+    env.G.fetch = async (url) => {
+      if (String(url).includes('/api/verify-license')) {
+        return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+      }
+      throw new Error('unexpected');
+    };
+
+    /* ---- SCENARIO 25 ---- */
+    await scenario('25. Beta mode: Left=200Hz, Right=214Hz (delta=14Hz)', async () => {
+      const c = await freshClient(env);
+      await sleep(30);
+      c.FocusBot.play();
+      await waitFor(() => c.FocusBot.isPlaying, 2000, 'play beta');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 200, 'Beta Left 200 Hz');
+      expectEqual(oscR.frequency.value, 214, 'Beta Right 214 Hz');
+      const delta = Math.abs(oscR.frequency.value - oscL.frequency.value);
+      expectEqual(delta, 14, 'Beta delta = 14 Hz');
+    });
+
+    /* ---- SCENARIO 26 ---- */
+    await scenario('26. Alpha mode: Left=200Hz, Right=210Hz (delta=10Hz)', async () => {
+      const c = await freshClient(env);
+      await sleep(30);
+      c.FocusBot.setMode('alpha');
+      c.FocusBot.play();
+      await waitFor(() => c.FocusBot.isPlaying, 2000, 'play alpha');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 200, 'Alpha Left 200 Hz');
+      expectEqual(oscR.frequency.value, 210, 'Alpha Right 210 Hz');
+      const delta = Math.abs(oscR.frequency.value - oscL.frequency.value);
+      expectEqual(delta, 10, 'Alpha delta = 10 Hz');
+    });
+
+    /* ---- SCENARIO 27 ---- */
+    await scenario('27. Theta mode: Left=180Hz, Right=186Hz (delta=6Hz)', async () => {
+      const c = await freshClient(env);
+      await sleep(30);
+      c.FocusBot.setMode('theta');
+      c.FocusBot.play();
+      await waitFor(() => c.FocusBot.isPlaying, 2000, 'play theta');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 180, 'Theta Left 180 Hz');
+      expectEqual(oscR.frequency.value, 186, 'Theta Right 186 Hz');
+      const delta = Math.abs(oscR.frequency.value - oscL.frequency.value);
+      expectEqual(delta, 6, 'Theta delta = 6 Hz');
+    });
+
+    /* ---- SCENARIO 28 ---- */
+    await scenario('28. Gamma mode: Left=200Hz, Right=240Hz (delta=40Hz)', async () => {
+      const c = await freshClient(env);
+      await sleep(30);
+      c.FocusBot.setMode('gamma');
+      c.FocusBot.play();
+      await waitFor(() => c.FocusBot.isPlaying, 2000, 'play gamma');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 200, 'Gamma Left 200 Hz');
+      expectEqual(oscR.frequency.value, 240, 'Gamma Right 240 Hz');
+      const delta = Math.abs(oscR.frequency.value - oscL.frequency.value);
+      expectEqual(delta, 40, 'Gamma delta = 40 Hz');
+    });
+  } finally {
+    env.restore();
+  }
+}
+
+/* ===========================================================================
+ * SCENARIO 29-36 : PRODUCTIVITY SUITE (Pomodoro + Deep Work Analytics + Ambient)
+ * ======================================================================== */
+async function productivityScenarios() {
+  const env = installClientEnv();
+  const lastInterval = (name) => env.intervals.filter((x) => x.fn.toString().includes(name)).at(-1);
+  // Provision a valid Pro license so the productivity suite can run end-to-end
+  env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-SUITE');
+  env.G.fetch = async (url) => {
+    if (String(url).includes('/api/verify-license')) {
+      return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+    }
+    throw new Error('unexpected');
+  };
+  const c = await freshClient(env);
+  const fb = c.FocusBot;
+  await sleep(30);
+  expectEqual(fb.isPro, true, 'suite provisioned as Pro');
+  try {
+
+  /* ---- SCENARIO 29 ---- */
+  await scenario('29. Pomodoro: start → focus + auto-play + 25:00', async () => {
+    fb.pomodoro.start();
+    const ps = fb.pomodoro.getState();
+    expectEqual(ps.running, true, 'pomodoro running');
+    expectEqual(ps.state, 'focus', 'focus phase');
+    expectEqual(ps.remainingMs, 25 * 60 * 1000, 'remaining 25:00');
+    await waitFor(() => fb.isPlaying, 2000, 'auto-play engaged');
+    expectEqual(c.stub('.pomo-time').textContent, '25:00', 'UI timer 25:00');
+    expectEqual(c.stub('.pomo-state').textContent, 'Focus', 'UI phase Focus');
+  });
+
+  /* ---- SCENARIO 30 ---- */
+  await scenario('30. Pomodoro: 25-min tick → break, audio paused, alert', async () => {
+    const it = lastInterval('pomodoroTick');
+    expectTrue(!!it, 'pomodoro tick interval registered');
+    for (let i = 0; i < 1500; i++) it.fn();
+    const ps = fb.pomodoro.getState();
+    expectEqual(ps.state, 'break', 'focus finished → break');
+    expectEqual(ps.remainingMs, 5 * 60 * 1000, 'break 5:00');
+    expectEqual(ps.completed, 1, 'one focus session completed');
+    expectEqual(fb.isPlaying, false, 'audio paused during break');
+    expectEqual(c.stub('.pomo-state').textContent, 'Break', 'UI phase Break');
+  });
+
+  /* ---- SCENARIO 31 ---- */
+  await scenario('31. Pomodoro: break over → next focus cycle auto-plays', async () => {
+    const it = lastInterval('pomodoroTick');
+    expectTrue(!!it, 'pomodoro tick available');
+    for (let i = 0; i < 300; i++) it.fn();
+    const ps = fb.pomodoro.getState();
+    expectEqual(ps.state, 'focus', 'break finished → focus');
+    expectEqual(ps.remainingMs, 25 * 60 * 1000, 'new 25:00 loaded');
+    await waitFor(() => fb.isPlaying, 2000, 'audio auto-resumed');
+  });
+
+  /* ---- SCENARIO 32 ---- */
+  await scenario('32. Pomodoro: reset stops the cycle and the audio', async () => {
+    expectTrue(fb.isPlaying, 'playing before reset');
+    fb.pomodoro.reset();
+    const ps = fb.pomodoro.getState();
+    expectEqual(ps.running, false, 'stopped');
+    expectEqual(ps.state, 'idle', 'idle state');
+    expectEqual(fb.isPlaying, false, 'audio stopped');
+    expectEqual(c.stub('.pomo-time').textContent, '25:00', 'UI reset to 25:00');
+  });
+
+  /* ---- SCENARIO 33 ---- */
+  await scenario('33. Analytics: focus seconds accumulate and persist locally', async () => {
+    fb.pomodoro.start();
+    await waitFor(() => fb.isPlaying, 2000, 'playing');
+    const at = lastInterval('analyticsTick');
+    expectTrue(!!at, 'analytics tick interval registered');
+    for (let i = 0; i < 12; i++) at.fn();
+    const st = await fb.analytics.getStats();
+    expectTrue(st.todayMs >= 12000, 'today >= 12s total focus (got ' + st.todayMs + ')');
+    const saved = JSON.parse(env.ls.getItem('focusbot.analytics') || '{}');
+    expectTrue(!!saved.days && Object.keys(saved.days).length > 0, 'analytics persisted to local storage');
+    expectTrue(c.stub('.stats-today').textContent.indexOf('s') !== -1, 'UI today stat rendered');
+  });
+
+  /* ---- SCENARIO 34 ---- */
+  await scenario('34. Analytics: chrome.storage.local preferred (MV3 path)', async () => {
+    const chMap = new Map();
+    env.G.chrome = {
+      storage: {
+        local: {
+          get(k, cb) { const out = {}; if (chMap.has(k)) out[k] = chMap.get(k); cb(out); },
+          set(o, cb) { for (const k in o) chMap.set(k, o[k]); if (cb) cb(); },
+        },
+      },
+    };
+    try {
+      const c2 = await freshClient(env);
+      await sleep(30);
+      const fb2 = c2.FocusBot;
+      const st0 = await fb2.analytics.getStats();
+      const baseMs = st0.todayMs || 0;
+      fb2.pomodoro.start();
+      const at = lastInterval('analyticsTick');
+      for (let i = 0; i < 12; i++) at.fn();
+      await sleep(20);
+      const saved = chMap.get('focusbot.analytics');
+      expectTrue(!!saved, 'analytics written to chrome.storage.local');
+      const st = await fb2.analytics.getStats();
+      expectTrue(st.todayMs >= baseMs + 12000, 'stats resolved from chrome storage (+12s)');
+    } finally {
+      env.G.chrome = undefined;
+    }
+  });
+  } finally { env.restore(); }
+}
+
+/* ===========================================================================
+ * SCENARIO 35-36 : AMBIENT MIXER (isolated fresh module so the global audio
+ * mock statics reflect exactly this client instance's graph)
+ * ======================================================================== */
+async function ambientMixerScenarios() {
+  const env = installClientEnv();
+  env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-AMB');
+  env.G.fetch = async (url) => {
+    if (String(url).includes('/api/verify-license')) {
+      return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+    }
+    throw new Error('unexpected');
+  };
+  const c = await freshClient(env);
+  const fb = c.FocusBot;
+  await sleep(30);
+  try {
+
+  /* ---- SCENARIO 35 ---- */
+  await scenario('35. Ambient: white noise layer added under the carrier', async () => {
+    fb.setAmbient('white');
+    expectEqual(fb.ambient, 'white', 'ambient state set');
+    expectTrue(MockAudioContext.sources.length >= 1, 'noise source created');
+    const src = MockAudioContext.sources.at(-1);
+    expectEqual(src.buffer.numberOfChannels, 1, 'mono buffer');
+    expectEqual(src.loop, true, 'looping source');
+    expectEqual(src._started, true, 'source started');
+    // gains[0] is the 6.0 BOOST pre-amp; gains[1] is the ambient layer
+    expectApprox(MockAudioContext.gains[1].gain.value, 0.14, 1e-9, 'ambient gain level');
+    expectApprox(MockAudioContext.gains.at(-1).gain.value, 0, 1e-9, 'master stays the last gain node');
+    fb.setAmbient('off');
+    expectEqual(fb.ambient, 'off', 'switched off');
+    expectEqual(MockAudioContext.gains[1].gain.value, 0, 'ambient gain zeroed when off');
+  });
+
+  /* ---- SCENARIO 36 ---- */
+  await scenario('36. Ambient: pink noise buffer + rain (filtered) variants', async () => {
+    fb.setAmbient('pink');
+    let src = MockAudioContext.sources.at(-1);
+    expectEqual(src.buffer.numberOfChannels, 1, 'pink mono buffer');
+    const pink = src.buffer.getChannelData(0);
+    expectTrue(pink.length > 0, 'pink buffer has samples');
+    expectTrue(pink.some((v) => Math.abs(v) > 0.0001), 'pink data non-silent');
+    fb.setAmbient('rain');
+    src = MockAudioContext.sources.at(-1);
+    expectTrue(!!src.buffer, 'rain buffer created');
+    expectTrue(src.connections.length >= 1, 'rain source connected (to lowpass)');
+    fb.setAmbient('off');
+    expectEqual(fb.ambient, 'off', 'off state');
+  });
+  } finally { env.restore(); }
+}
+
+/* ===========================================================================
+ * SCENARIO 37-39 : CLIENT HARDENING (engine token, storage preference, messaging)
+ * ======================================================================== */
+function signedToken(payload) {
+  function b64url(s) { return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
+  return b64url(JSON.stringify(payload)) + '.DUMY-SIG';
+}
+
+const validLicenseFetch = (extra) => async (url) => {
+  if (String(url).includes('/api/verify-license')) {
+    return { ok: true, status: 200, json: async () => Object.assign(
+      { valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }, extra || {}
+    ) };
+  }
+  throw new Error('unexpected');
+};
+
+async function clientHardeningScenarios() {
+
+  /* ---- SCENARIO 37 ---- */
+  await scenario('37. Hardening: engine token drives frequency matrix + gain', async () => {
+    const env = installClientEnv();
+    try {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-ENGINE');
+      const token = signedToken({
+        v: 1, seed: 7, gain: 0.8,
+        mods: {
+          beta:  { l: 220, r: 236, ph: 2, k: 1 },
+          alpha: { l: 205, r: 214, ph: 0, k: 1 },
+          theta: { l: 190, r: 196, ph: 1, k: 1 },
+          gamma: { l: 250, r: 292, ph: 3, k: 1 },
+        },
+      });
+      env.G.fetch = validLicenseFetch({ engine: token });
+      const c2 = await freshClient(env);
+      await sleep(30);
+      const f2 = c2.FocusBot;
+      expectEqual(f2.isPro, true, 'pro active');
+      f2.play();
+      await waitFor(() => f2.isPlaying, 2000, 'play with token');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 220, 'engine left 220 Hz');
+      expectEqual(oscR.frequency.value, 236, 'engine right 236 Hz');
+      const gain = MockAudioContext.gains.at(-1).gain;
+      expectApprox(gain.lastRamp, 0.05 * 0.7 * 0.8, 1e-9, 'engine gain coefficient 0.8 applied');
+      f2.setMode('gamma');
+      expectEqual(oscL.frequency.value, 250, 'engine gamma left 250');
+      expectEqual(oscR.frequency.value, 292, 'engine gamma right 292');
+    } finally { env.restore(); }
+  });
+
+  /* ---- SCENARIO 38 ---- */
+  await scenario('38. Hardening: corrupt/absent token → safe fallback matrix', async () => {
+    const env = installClientEnv();
+    try {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-CORRUPT-ENGINE');
+      env.G.fetch = validLicenseFetch({ engine: 'not-a-valid-token!!' });
+      const c2 = await freshClient(env);
+      await sleep(30);
+      const f2 = c2.FocusBot;
+      f2.play();
+      await waitFor(() => f2.isPlaying, 2000, 'play with bogus token');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 200, 'fallback left 200');
+      expectEqual(oscR.frequency.value, 214, 'fallback right 214');
+      expectEqual(f2.isPro, true, 'pro still active with fallback');
+    } finally { env.restore(); }
+  });
+
+  /* ---- SCENARIO 39 ---- */
+  await scenario('39. Messaging bridge: FOCUSBOT_CTRL drives the widget (MV3 popup)', async () => {
+    const env = installClientEnv();
+    const listeners = [];
+    env.G.chrome = { runtime: { onMessage: { addListener: (fn) => listeners.push(fn) } } };
+    env.G.fetch = validLicenseFetch();
+    try {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-MSG');
+      const c2 = await freshClient(env);
+      await sleep(30);
+      const f2 = c2.FocusBot;
+      expectEqual(listeners.length, 1, 'content-script registered a runtime listener');
+      let last = null;
+      const respond = (res) => { last = res; };
+
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'getState' }, {}, respond);
+      expectEqual(last.ok, true, 'getState acknowledged');
+      expectEqual(last.state.pro, true, 'state includes pro');
+
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'play' }, {}, respond);
+      await waitFor(() => f2.isPlaying, 2000, 'play via messenger');
+      expectEqual(last.ok, true, 'play acknowledged');
+
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'setMode', mode: 'theta' }, {}, respond);
+      expectEqual(f2.state.mode, 'theta', 'mode switched via messenger');
+
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'pomodoroStart' }, {}, respond);
+      expectEqual(f2.state.pomodoro.running, true, 'pomodoro started via messenger');
+
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'bogus-command' }, {}, respond);
+      expectEqual(last.ok, false, 'unknown command rejected');
+    } finally { env.restore(); }
+  });
+}
 console.log(`
 ${C.b}${C.B}FocusBot Automated Test Suite${C.x}
 ${C.d}Node ${process.version} · zero external dependencies${C.x}`);
@@ -1234,6 +1812,19 @@ try {
 
   section('CLIENT — Edge Cases & Security Audit (client/focus-bot.js)');
   await clientEdgeCaseScenarios();
+
+  section('CLIENT — E2E Hard Paywall Guard (zero-bypass verification)');
+  await e2ePaywallGuardScenarios();
+
+  section('CLIENT — Audio Synthesizer Frequency Math');
+  await audioSynthScenarios();
+
+  section('CLIENT — Productivity Suite (Pomodoro, Analytics, Ambient Mixer)');
+  await productivityScenarios();
+  await ambientMixerScenarios();
+
+  section('CLIENT — Hardening & MV3 Bridge (engine token, chrome.storage, popup)');
+  await clientHardeningScenarios();
 } catch (err) {
   console.error(`\n${C.r}[FATAL]${C.x} Test infrastructure crashed:`, err);
   process.exitCode = 1;
