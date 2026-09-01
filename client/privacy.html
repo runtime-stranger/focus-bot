@@ -99,16 +99,17 @@
 
     <h2>2. Local-Only Storage</h2>
     <div class="callout green">
-      Tüm analitik verileri (Pomodoro süresi, oturum logları) tamamen kullanıcının yerel tarayıcısında (chrome.storage.local) saklanır.
+      FocusBot yalnızca yerel tarayıcı depolamasını kullanır: deneme penceresi, ses seviyesi tercihleri, frekans ve lisans durumu (chrome.storage.local). Analitik yoktur.
     </div>
     <ul>
-      <li>Focus time, daily/weekly deep-work totals, Pomodoro session counts and
-      your saved frequency preferences are written <strong>only</strong> to your
-      local browser storage (<code>chrome.storage.local</code>).</li>
+      <li>Your saved frequency preferences, volume slider settings, the start of
+      your free trial window and the license state are written <strong>only</strong>
+      to your local browser storage (<code>chrome.storage.local</code> in the
+      extension, <code>localStorage</code> on the standalone/demo page).</li>
       <li>This data never leaves your device. It cannot be accessed by us or by any
       third party.</li>
       <li>Removing the extension (or clearing browser data) permanently deletes all
-      of it.</li>
+      of it — including any remaining trial or license state.</li>
     </ul>
 
     <h2>3. Bitcoin Payments Are Processed Anonymously</h2>
@@ -129,12 +130,15 @@
     <h2>4. Permissions We Use — And Why</h2>
     <p>FocusBot requests the <strong>minimum</strong> permissions required:</p>
     <ul>
-      <li><code>storage</code> — to persist your deep-work analytics, Pomodoro
-      sessions, frequency preferences and license state locally.</li>
+      <li><code>storage</code> — to persist your free-trial window, volume
+      preferences and license state in <code>chrome.storage.local</code> (all kept
+      strictly on your device).</li>
       <li><code>notifications</code> — to alert you when a Pomodoro focus or break
       cycle completes. No notification content leaves your device.</li>
     </ul>
-    <p>We do <strong>not</strong> request access to your browsing history, tabs,
+    <p>All state (frequency preferences, trial window, volume sliders and license
+    state) is kept in your local browser storage — nothing is uploaded. We
+    do <strong>not</strong> request access to your browsing history, tabs,
     bookmarks, camera, microphone, location or any other personal resources.</p>
 
     <h2>5. Third-Party Services</h2>
@@ -151,10 +155,10 @@
     <p>None of these third parties receive, sell, or are able to associate personal
     data with you.</p>
 
-    <h2>6. Analytics &amp; Logs</h2>
-    <p>FocusBot includes <strong>no third-party analytics</strong>, no ad trackers,
-    no crash reporting that leaves your device, and no fingerprinting. Any usage
-    logs that exist are stored locally and are yours alone.</p>
+    <h2>6. No Tracking, No Logs</h2>
+    <p>FocusBot includes <strong>no analytics of any kind</strong>, no ad trackers,
+    no crash reporting that leaves your device, and no fingerprinting. Nothing you
+    do is counted, stored or uploaded.</p>
 
     <h2>7. Contact</h2>
     <p>If you have any questions about this privacy policy or how your data is

@@ -18,18 +18,20 @@ spend on them.
 
 ## 2. Local-Only Storage
 
-**"Tüm analitik verileri (Pomodoro süresi, oturum logları) tamamen kullanıcının
-yerel tarayıcısında (chrome.storage.local) saklanır."** — All analytics data
-(Pomodoro duration, session logs, deep-work focus time) is stored entirely in
-your local browser via `chrome.storage.local`.
+**"Tüm durumlar (ses frekansı tercihleri, Pomodoro ilerlemesi, lisans durumu)
+yalnızca kullanıcının yerel tarayıcısında saklanır."** — All state (your saved
+frequency preferences, Pomodoro progress, custom settings and license state)
+is stored entirely in your local browser via `chrome.storage.local` (in the
+extension) and `localStorage` (on the demo/standalone page). This includes the
+start timestamp of your free trial window and your two independent volume
+slider settings.
 
-- Focus time, daily/weekly deep-work totals, Pomodoro session counts and your
-  saved frequency preferences are written **only** to your local browser
-  storage.
 - This data never leaves your device. It cannot be accessed by us or by any
   third party.
 - Removing the extension (or clearing browser data) permanently deletes all of
-  it.
+  it — including any remaining trial or license state.
+- FocusBot does not collect usage logs, session timers or analytics of any
+  kind.
 
 ## 3. Bitcoin Payments Are Processed Anonymously
 
@@ -53,8 +55,8 @@ Worker.
 
 FocusBot requests the **minimum** permissions required to function:
 
-- **`storage`** — to persist your deep-work analytics, Pomodoro sessions,
-  frequency preferences and license state locally in `chrome.storage.local`.
+- **`storage`** — to persist your trial window, volume preferences and license
+  state in `chrome.storage.local` (all stored strictly on your device).
 - **`notifications`** — to alert you when a Pomodoro focus or break cycle
   completes. No notification content leaves your device.
 
@@ -74,11 +76,11 @@ camera, microphone, location or any other personal resources.
 None of these third parties receive, sell, or are able to associate personal
 data with you.
 
-## 6. Analytics & Logs
+## 6. No Tracking, No Logs
 
-FocusBot includes **no third-party analytics**, no ad trackers, no crash
-reporting that leaves your device, and no fingerprinting. Any usage logs that
-exist are stored locally and are yours alone.
+FocusBot includes **no analytics of any kind**, no ad trackers, no crash
+reporting that leaves your device, and no fingerprinting. Nothing you do is
+counted, stored or uploaded.
 
 ## 7. Contact
 

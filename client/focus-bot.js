@@ -6,20 +6,22 @@
  *
  *  ARCHITECTURE
  *    - FAB (#fb-fab) → Panel (#fb-panel) → Payment Modal (#fb-overlay)
- *    - HARD PAYWALL: AudioContext is NEVER created without a valid license.
- *      All playback is blocked until the user activates a Pro license via
- *      BTC on-chain payment (TXID) or license key.
+ *    - ACCESS MODEL: sound unlocks with Pro (BTC on-chain license) OR a
+ *      3-day frictionless free trial (first run stamps focusbot.trialStart;
+ *      hasAccess() gates every entry point below). Trial expiry is enforced
+ *      live (watchdog + gates + re-suspend), not just at load time.
  *    - Audio engine: 2x OscillatorNode (pure Left/Right sine) + ChannelMerger +
  *      single Master GainNode (ceiling 0.05 — hearing safety). The AudioContext
  *      is created once, then managed solely via suspend()/resume().
+ *    - Modes: Binaural Delta/Theta/Alpha/Beta/Gamma + Solfeggio 432Hz/528Hz
+ *      (equal-phase monaural tones) + custom 0–1000 Hz range.
  *    - Smart Pomodoro: 25 min focus / 5 min break cycles. Focus phase starts
- *      the frequency automatically; the end of the cycle alerts the user.
- *    - Deep Work Analytics: daily/weekly total focus time. Persisted through a
- *      storage adapter that prefers chrome.storage.local (MV3) and falls back
- *      to window.localStorage on plain <script> integrations.
- *    - Ambient mixer: optional Pink / Rain / White noise layer mixed under the
- *      binaural carrier (BS129-ish diffusion buffers, generated at runtime —
- *      no audio files are ever downloaded).
+ *      the frequency automatically; each phase change rings a fully synthesized
+ *      gong chime (D5, 587.33 Hz, exponential 2.5 s decay — no audio files).
+ *    - Ambient mixer: optional Pink / Brown / Rain / White noise layers mixed
+ *      under the binaural carrier (diffusion buffers generated at runtime —
+ *      no audio files are ever downloaded). Binaural & ambient volumes are
+ *      independent sliders, persisted via chrome.storage.local (or localStorage).
  *    - CLIENT-SIDE HARDENING: the frequency modulation matrix, phase angles
  *      and oscillator coefficients are NOT shipped as plain literals. They are
  *      returned inside a base64url + HMAC-signed `engine` token by the
@@ -88,7 +90,32 @@
   const DEFAULT_VOLUME = 0.7;
   const SWEEP_SEC = 1.2;                            // Frequency sweep on mode switch
   const SUSPEND_DELAY_MS = 330;                     // Suspend delay after fade-out
-  const AMBIENT_LEVEL = 0.14;                       // Ambient layer gain under the carrier
+  // Ambient gain staging: per-layer output levels (after makeup) engineered to
+  // sit net, balanced and clearly audible under headphones. The ambient master
+  // bus then feeds the soft limiter → master; the binaural carrier runs through
+  // its own 0.50 stage so the two never stomp on each other.
+  const AMBIENT_LEVELS = { pink: 0.75, brown: 0.8, rain: 0.85, white: 0.6 };
+  const AMBIENT_KINDS = ['pink', 'brown', 'rain', 'white'];   // creation + UI order
+  const AMBIENT_MASTER_GAIN = 0.8;      // ambient master bus (0.80-1.0 band) — default
+  const BINAURAL_GAIN = 0.5;            // binaural carrier stage into the master — default
+  const PINK_MAKEUP = 2.5;              // compensates pink shaping energy loss
+  const RAIN_FILTER_Q = 1.2;            // low-pass resonance at 1250 Hz
+  const FADE_S = 0.05;                  // micro fade-in/out — pop/click-free
+  const AMBIENT_COMPRESSOR = { threshold: -18, knee: 24, ratio: 6, attack: 0.005, release: 0.2 };
+  const BROWN_SLOPE = 0.02;             // 6 dB/octave integration constant for brown noise
+  const BROWN_SLOPE_GAIN = 3.2;         // normalize the deep-bass brown output
+
+  /** 3-day frictionless trial — sound unlocked for the first 72 hours. */
+  const TRIAL_DAYS = 3;
+  const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
+  const TRIAL_CHECK_MS = 30 * 1000;     // mid-session expiry watchdog
+
+  /** Meditative gong/chime for Pomodoro phase transitions (pure synthesis). */
+  const CHIME_FREQ = 587.33;            // D5
+  const CHIME_ATTACK_S = 0.01;          // fast attack
+  const CHIME_DECAY_S = 2.5;            // long exponential tail
+  const CHIME_PEAK = 0.06;              // modest peak — hearing safe, clearly audible
+  const CHIME_STOP_MS = 2700;           // cleanup after the tail completes
 
   /** Smart Pomodoro cycle (25 min focus / 5 min break) */
   const POMODORO_FOCUS_MS = 25 * 60 * 1000;
@@ -97,27 +124,65 @@
   /** Keep a fallback matrix so the widget still boots on degraded responses.
    *  Production builds get their numbers from the signed engine token. */
   const MODES = {
-    beta:  { label: 'Beta',  desc: 'Focus',          hz: 14, left: 200, right: 214 },
-    alpha: { label: 'Alpha', desc: 'Relaxation',     hz: 10, left: 200, right: 210 },
-    theta: { label: 'Theta', desc: 'Creativity',     hz: 6,  left: 180, right: 186 },
-    gamma: { label: 'Gamma', desc: 'Peak Cognition', hz: 40, left: 200, right: 240 },
+    delta: { label: 'Delta',  desc: 'Deep Rest',      hz: 2,  left: 100, right: 102 },
+    theta: { label: 'Theta',  desc: 'Creativity',     hz: 6,  left: 180, right: 186 },
+    alpha: { label: 'Alpha',  desc: 'Relaxation',     hz: 10, left: 200, right: 210 },
+    beta:  { label: 'Beta',   desc: 'Focus',          hz: 14, left: 200, right: 214 },
+    gamma: { label: 'Gamma',  desc: 'Peak Cognition', hz: 40, left: 200, right: 240 },
+    '432': { label: '432Hz',  desc: 'Clarity',        hz: 0,  left: 432, right: 432 },
+    '528': { label: '528Hz',  desc: 'Deep Reset',     hz: 0,  left: 528, right: 528 },
   };
 
   /** Background ambiance layers (binaural carrier + noise). */
   const AMBIENTS = {
     off:   { label: 'Off', kind: null },
-    pink:  { label: 'Pink', kind: 'pink' },
-    rain:  { label: 'Rain', kind: 'rain' },
+    pink:  { label: 'Pink',  kind: 'pink' },
+    brown: { label: 'Brown', kind: 'brown' },
+    rain:  { label: 'Rain',  kind: 'rain' },
     white: { label: 'White', kind: 'white' },
   };
 
-  /** localStorage / chrome.storage keys */
+  /** Storage keys — persisted via chrome.storage.local (MV3) or localStorage fallback. */
   const LS = {
     key: 'focusbot.licenseKey',
     verifiedAt: 'focusbot.verifiedAt',
     customFreq: 'focusbot.customFreq',
-    analytics: 'focusbot.analytics',
+    trialStart: 'focusbot.trialStart',      // first-run epoch → 72h trial window
+    volBinaural: 'focusbot.volBinaural',    // "Binaural / Tone" slider (0..1)
+    volAmbient: 'focusbot.volAmbient',      // "Ambient Mixer" slider (0..1)
   };
+
+  /** Storage adapter: chrome.storage.local when present (extension), else
+   *  localStorage (plain page / demo / tests). */
+  function hasChromeStorage() {
+    return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local;
+  }
+  function storageGet(keys) {
+    return new Promise((resolve) => {
+      if (hasChromeStorage() && typeof chrome.storage.local.get === 'function') {
+        try {
+          chrome.storage.local.get(keys, (v) => { resolve(v || {}); });
+          return;
+        } catch (_) { /* fall through to localStorage */ }
+      }
+      const out = {};
+      const arr = Array.isArray(keys) ? keys : Object.keys(keys || {});
+      try { for (const k of arr) out[k] = localStorage.getItem(k); } catch (_) {}
+      resolve(out);
+    });
+  }
+  function storageSet(key, value) {
+    try {
+      if (hasChromeStorage()) { chrome.storage.local.set({ [key]: value }); return; }
+      localStorage.setItem(key, String(value));
+    } catch (_) {}
+  }
+  function storageRemove(key) {
+    try {
+      if (hasChromeStorage()) { chrome.storage.local.remove([key]); return; }
+      localStorage.removeItem(key);
+    } catch (_) {}
+  }
 
   /* ==========================================================================
    * 2) STATE
@@ -134,11 +199,18 @@
     proExpiresAt: null,
     verifying: false,
 
+    /* 3-day frictionless trial (first run stamps LS.trialStart) */
+    trialStart: null,
+
+    /* Independent volume stages (persisted) */
+    volBinaural: BINAURAL_GAIN,          // "Binaural / Tone volume" (0..1)
+    volAmbient: AMBIENT_MASTER_GAIN,     // "Ambient Mixer volume" (0..1)
+
     /* Signed coefficient payload from /api/verify-license (client hardening) */
     engine: null,        // { v, seed, gain, mods:{ <mode>:{l,r,ph,k} } }
 
     audioCtx: null,      // single AudioContext — created once
-    nodes: null,         // { oscL, oscR, merger, boostGain, ambGain, masterGain, amb }
+    nodes: null,         // { oscL, oscR, merger, boostGain, binauralGain, ambMasterGain, pinkMakeup, ambGains, ambCompressor, masterGain, amb }
     suspendTimer: null,
     autoplayBlocked: false,       // browser refused resume() until a user gesture
     autoplayNoticeShown: false,   // only surface the autoplay toast once
@@ -152,15 +224,9 @@
       completed: 0,      // completed 25-min focus sessions (today-decay on load)
     },
 
-    /* Deep Work Analytics */
-    analytics: {
-      days: null,        // { 'YYYY-MM-DD': focusMs }
-      flushTick: 0,      // ticks since last persistence
-      interval: null,
-    },
-
-    /* Ambiance */
-    ambient: 'off',
+    /* Ambiance — independent multi-layer selection ('pink'/'rain'/'white') */
+    activeAmbients: new Set(),
+    ambBuffers: {},              // { kind: AudioBuffer } — generated once, reused
   };
 
   /* ---- Drag state (FAB launcher) ---- */
@@ -223,25 +289,54 @@
     const merger = ctx.createChannelMerger();
     const boostGain = ctx.createGain();
     boostGain.gain.value = BOOST_GAIN;
-    // Ambient layer is created BEFORE masterGain so the master stays the last
+    // Gain staging: the binaural carrier runs through its own 0.50 stage and
+    // the ambient layers through an 0.80 master bus → soft limiter → master.
+    // Everything is created BEFORE masterGain so the master stays the last
     // created gain node (keeps `gains.at(-1) === masterGain` for tests).
-    const ambGain = ctx.createGain();
-    ambGain.gain.value = 0;
+    const binauralGain = ctx.createGain();
+    binauralGain.gain.value = STATE.volBinaural;   // persisted "Binaural / Tone" stage
+    const ambMasterGain = ctx.createGain();
+    ambMasterGain.gain.value = STATE.volAmbient;   // persisted "Ambient Mixer" stage
+    const pinkMakeup = ctx.createGain();
+    pinkMakeup.gain.value = PINK_MAKEUP;
+    const ambCompressor = ctx.createDynamicsCompressor();
+    try {
+      ambCompressor.threshold.value = AMBIENT_COMPRESSOR.threshold;
+      ambCompressor.knee.value = AMBIENT_COMPRESSOR.knee;
+      ambCompressor.ratio.value = AMBIENT_COMPRESSOR.ratio;
+      ambCompressor.attack.value = AMBIENT_COMPRESSOR.attack;
+      ambCompressor.release.value = AMBIENT_COMPRESSOR.release;
+    } catch (_) {}
+    const ambGains = {};
+    for (const k of AMBIENT_KINDS) {
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      g.connect(ambMasterGain);
+      ambGains[k] = g;
+    }
     const masterGain = ctx.createGain();
     masterGain.gain.value = 0;
 
     oscL.connect(merger);
     oscR.connect(merger);
     merger.connect(boostGain);
-    boostGain.connect(masterGain);
-    ambGain.connect(masterGain);
+    boostGain.connect(binauralGain);
+    binauralGain.connect(masterGain);
+    // Pink makeup gain is static — wire it into the pink layer once so layer
+    // teardown never disconnects a shared node.
+    if (pinkMakeup && ambGains.pink) pinkMakeup.connect(ambGains.pink);
+    ambMasterGain.connect(ambCompressor);
+    ambCompressor.connect(masterGain);
     masterGain.connect(ctx.destination);
 
     oscL.start();
     oscR.start();
 
     STATE.audioCtx = ctx;
-    STATE.nodes = { oscL, oscR, merger, boostGain, ambGain, masterGain, amb: null };
+    STATE.nodes = {
+      oscL, oscR, merger, boostGain, binauralGain, ambMasterGain, pinkMakeup,
+      ambGains, ambCompressor, masterGain, amb: {},
+    };
   }
 
   /** Apply the active frequencies to the oscillators (live sweep) */
@@ -272,10 +367,68 @@
     return Math.min(MASTER_GAIN_MAX, MASTER_GAIN_MAX * STATE.volume * g);
   }
 
+  /** Live-ramp the two independent volume stages onto the active graph. */
+  function applyEngineVolumes() {
+    if (!STATE.nodes || !STATE.audioCtx) return;
+    const t = STATE.audioCtx.currentTime;
+    try {
+      STATE.nodes.binauralGain.gain.cancelScheduledValues(t);
+      STATE.nodes.binauralGain.gain.setTargetAtTime(STATE.volBinaural, t, FADE_S);
+      STATE.nodes.ambMasterGain.gain.cancelScheduledValues(t);
+      STATE.nodes.ambMasterGain.gain.setTargetAtTime(STATE.volAmbient, t, FADE_S);
+    } catch (_) {
+      STATE.nodes.binauralGain.gain.value = STATE.volBinaural;
+      STATE.nodes.ambMasterGain.gain.value = STATE.volAmbient;
+    }
+  }
+
+  /** Set + persist one volume stage ('binaural'|'ambient'). Values are 0–100%. */
+  function setVolumeTarget(which, pct) {
+    const v = Math.min(100, Math.max(0, Number(pct) || 0)) / 100;
+    if (which === 'binaural' || which === 'bin' || which === 'tone') {
+      STATE.volBinaural = v;
+      storageSet(LS.volBinaural, String(v));
+    } else {
+      STATE.volAmbient = v;
+      storageSet(LS.volAmbient, String(v));
+    }
+    applyEngineVolumes();
+  }
+
+  /** Fully synthesized gong chime for Pomodoro phase changes — no audio files.
+   *  Routes straight to the destination so it rings clearly even while the
+   *  master bus is faded (e.g. during a break when binaural audio is paused). */
+  function playChime() {
+    if (!STATE.audioCtx) return;
+    const ctx = STATE.audioCtx;
+    const t = ctx.currentTime;
+    try {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = CHIME_FREQ;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(CHIME_PEAK, t + CHIME_ATTACK_S);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + CHIME_DECAY_S);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start();
+      osc.stop(t + CHIME_DECAY_S + 0.05);
+      setTimeout(function () {
+        try { osc.disconnect(); } catch (_) {}
+        try { g.disconnect(); } catch (_) {}
+      }, CHIME_STOP_MS);
+    } catch (_) { /* audio graph not available — chime is cosmetic */ }
+  }
+
   function startPlayback() {
     if (STATE.playing) return;
-    if (!STATE.pro) {
-      toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
+    if (!hasAccess()) {
+      if (STATE.trialStart) {
+        toast('3-day trial ended. Activate Pro to keep listening.', 'error');
+      } else {
+        toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
+      }
       openUpsell();
       return;
     }
@@ -289,7 +442,7 @@
     try {
       g.cancelScheduledValues(t);
       g.setValueAtTime(g.value || 0, t);
-      g.linearRampToValueAtTime(gainTarget(), t + 0.4);
+      g.linearRampToValueAtTime(gainTarget(), t + FADE_S);
     } catch (_) { g.value = gainTarget(); }
 
     applyFrequencies();
@@ -300,8 +453,8 @@
       p.catch(function () {
         // Browser autoplay policy: audio stayed blocked because there was no
         // user gesture. Do NOT keep claiming playback — mark it blocked so the
-        // widget shows the real state, analytics stop counting, and the first
-        // real click (→ startPlayback) resumes cleanly.
+        // widget shows the real state and the first real click (→ startPlayback)
+        // resumes cleanly.
         if (STATE.audioCtx && STATE.audioCtx.state !== 'suspended') STATE.audioCtx.state = 'suspended';
         STATE.playing = false;
         STATE.autoplayBlocked = true;
@@ -328,7 +481,7 @@
       try {
         g.cancelScheduledValues(t);
         g.setValueAtTime(g.value || gainTarget(), t);
-        g.linearRampToValueAtTime(0, t + 0.25);
+        g.linearRampToValueAtTime(0, t + FADE_S);
       } catch (_) { g.value = 0; }
       STATE.suspendTimer = setTimeout(function () {
         STATE.suspendTimer = null;
@@ -403,6 +556,63 @@
     if (anyKey) {
       applyLicense(anyKey, { silent: true });
     }
+  }
+
+  /* ==========================================================================
+   * 5b) 3-DAY FRICTIONLESS TRIAL
+   * ======================================================================== */
+
+  /** Licensed Pro OR within the 72h trial window → sound is unlocked. */
+  function hasAccess() {
+    return STATE.pro || trialActive();
+  }
+  function trialActive() {
+    return !!(STATE.trialStart && (Date.now() - STATE.trialStart) < TRIAL_MS);
+  }
+  function trialEndAt() {
+    return STATE.trialStart ? STATE.trialStart + TRIAL_MS : null;
+  }
+  function trialRemainingMs() {
+    const e = trialEndAt();
+    return e ? Math.max(0, e - Date.now()) : 0;
+  }
+  /** Hungarian-style compact countdown for the footer badge. */
+  function fmtTrialRemaining() {
+    const h = Math.max(1, Math.ceil(trialRemainingMs() / 3600000));
+    return h >= 24 ? Math.floor(h / 24) + ' g\u00fcn' : h + ' saat';
+  }
+
+  /** Boot: restore persisted volumes + stamp the trial start on first run. */
+  async function bootstrapState() {
+    try {
+      const saved = await storageGet([LS.trialStart, LS.volBinaural, LS.volAmbient]);
+      let ts = Number(saved && saved[LS.trialStart]) || 0;
+      if (!ts) {
+        ts = Date.now();
+        storageSet(LS.trialStart, String(ts));
+      }
+      STATE.trialStart = ts;
+      const present = (v) => v != null && v !== '';
+      let vb = Number(saved && saved[LS.volBinaural]);
+      if (present(saved && saved[LS.volBinaural]) && Number.isFinite(vb) && vb >= 0 && vb <= 1) STATE.volBinaural = vb;
+      let va = Number(saved && saved[LS.volAmbient]);
+      if (present(saved && saved[LS.volAmbient]) && Number.isFinite(va) && va >= 0 && va <= 1) STATE.volAmbient = va;
+    } catch (_) {}
+    if (STATE.nodes && STATE.audioCtx) applyEngineVolumes();
+    updateFooter();
+  }
+
+  /** Called on a timer + tab re-focus: lock the engine the moment a live
+   *  trial window ends (crash-proof even for a session started before expiry). */
+  function trialWatchdog() {
+    if (STATE.pro) { updateFooter(); return; }
+    if (trialActive()) { updateFooter(); return; }
+    if (!STATE.trialStart) return;   // window not stamped yet — nothing to enforce
+    if (STATE.playing) pausePlayback();
+    if (STATE.activeAmbients.size) applyAmbients(new Set());
+    updateFooter();
+    openUpsell();
+    toast('3-day trial ended. Activate Pro to keep listening.', 'error');
   }
 
   /* ==========================================================================
@@ -516,7 +726,7 @@
   }
 
   function enterCustomRange(pair) {
-    if (!STATE.pro) {
+    if (!hasAccess()) {
       toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
       openUpsell();
       return;
@@ -570,130 +780,7 @@
   function setFrequencyRange(left, right) { enterCustomRange(normalizePair(left, right)); }
 
   /* ==========================================================================
-   * 7b) STORAGE ADAPTER — chrome.storage.local (MV3) → localStorage fallback
-   * ======================================================================== */
-  function dayId(d) {
-    const p = (n) => (n < 10 ? '0' + n : String(n));
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-  }
-
-  function storageGet(key) {
-    return new Promise((resolve) => {
-      try {
-        const ch = (typeof chrome !== 'undefined') ? chrome : null;
-        if (ch && ch.storage && ch.storage.local && typeof ch.storage.local.get === 'function') {
-          ch.storage.local.get(key, (obj) => {
-            try { resolve(obj && obj[key] !== undefined ? obj[key] : null); }
-            catch (_) { resolve(null); }
-          });
-          return;
-        }
-      } catch (_) { /* no chrome.storage */ }
-      try { resolve(localStorage.getItem(key)); } catch (_) { resolve(null); }
-    });
-  }
-
-  function storageSet(key, value) {
-    return new Promise((resolve) => {
-      try {
-        const ch = (typeof chrome !== 'undefined') ? chrome : null;
-        if (ch && ch.storage && ch.storage.local && typeof ch.storage.local.set === 'function') {
-          ch.storage.local.set({ [key]: value }, () => {
-            try {
-              // A storage write can still fail (quota exceeded, incognito)
-              // — surface it instead of reporting a false success. Analytics
-              // keeps working from memory either way.
-              const blocked = ch.runtime && ch.runtime.lastError;
-              resolve(!blocked);
-            } catch (_) { resolve(true); }
-          });
-          return;
-        }
-      } catch (_) { /* no chrome.storage */ }
-      try { localStorage.setItem(key, value); resolve(true); } catch (_) { resolve(true); }
-    });
-  }
-
-  /* ==========================================================================
-   * 7c) DEEP WORK ANALYTICS — daily/weekly local focus tracking
-   * ======================================================================== */
-  async function loadAnalytics() {
-    if (STATE.analytics.days) return STATE.analytics.days;
-    let days = {};
-    try {
-      const raw = await storageGet(LS.analytics);
-      const parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && parsed.days && typeof parsed.days === 'object' && !Array.isArray(parsed.days)) {
-        days = parsed.days;
-      }
-    } catch (_) { /* corrupt payload → fresh start */ }
-    if (!STATE.analytics.days) STATE.analytics.days = days;
-    return days;
-  }
-
-  async function persistAnalytics() {
-    try {
-      await storageSet(LS.analytics, JSON.stringify({ days: STATE.analytics.days, updatedAt: Date.now() }));
-    } catch (_) {}
-  }
-
-  /** Fired every second while the widget is mounted. */
-  function analyticsTick() {
-    const days = STATE.analytics.days;
-    if (!days) return;
-    const today = dayId(new Date());
-    // Only count while a focus cycle is actively threading audio
-    if (STATE.pomodoro.running && STATE.pomodoro.state === 'focus' && STATE.playing) {
-      // Numeric-safe: a tampered/corrupt value must never string-concatenate.
-      const prev = Number(days[today]);
-      days[today] = (Number.isFinite(prev) && prev > 0 ? prev : 0) + 1000;
-    }
-    STATE.analytics.flushTick++;
-    if (STATE.analytics.flushTick >= 10) {
-      STATE.analytics.flushTick = 0;
-      persistAnalytics();
-    }
-  }
-
-  async function getStats() {
-    const days = await loadAnalytics();
-    const today = dayId(new Date());
-    let todayMs = Number(days[today]);
-    todayMs = Number.isFinite(todayMs) && todayMs > 0 ? todayMs : 0;
-    let weekMs = 0;
-    const d = new Date();
-    for (let i = 0; i < 7; i++) {
-      const k = dayId(d);
-      if (!isNaN(d.getTime())) {
-        const wk = Number(days[k]);
-        if (Number.isFinite(wk) && wk > 0) weekMs += wk;
-      }
-      d.setDate(d.getDate() - 1);
-    }
-    todayMs = Math.max(0, todayMs);
-    weekMs = Math.max(0, weekMs);
-    return { todayMs, weekMs, sessions: STATE.pomodoro.completed };
-  }
-
-  function fmtDur(ms) {
-    if (ms < 60000) return Math.floor(ms / 1000) + 's';
-    if (ms < 3600000) return Math.floor(ms / 60000) + 'm';
-    return (ms / 3600000).toFixed(1) + 'h';
-  }
-
-  function renderStats(st) {
-    const s = st || { todayMs: 0, weekMs: 0, sessions: 0 };
-    if (els.statsToday) els.statsToday.textContent = fmtDur(s.todayMs);
-    if (els.statsWeek) els.statsWeek.textContent = fmtDur(s.weekMs);
-    if (els.statsSessions) els.statsSessions.textContent = String(s.sessions);
-  }
-
-  async function refreshStats() {
-    renderStats(await getStats());
-  }
-
-  /* ==========================================================================
-   * 7d) SMART POMODORO — 25 min focus / 5 min break
+   * 7b) SMART POMODORO — 25 min focus / 5 min break
    * ======================================================================== */
   function fmtClock(ms) {
     const total = Math.max(0, Math.floor(ms / 1000));
@@ -744,7 +831,7 @@
     p.state = 'idle';
     p.remainingMs = POMODORO_FOCUS_MS;
     if (STATE.playing) pausePlayback();
-    if (STATE.ambient !== 'off') setAmbient('off');
+    if (STATE.activeAmbients.size) setAmbient('off');
     updatePomodoroUI();
     toast('Pomodoro stopped.', 'info');
     return true;
@@ -760,19 +847,21 @@
       p.remainingMs = POMODORO_BREAK_MS;
       p.completed++;
       if (STATE.playing) pausePlayback();
-      if (STATE.ambient !== 'off') setAmbient('off');
+      if (STATE.activeAmbients.size) setAmbient('off');
+      playChime();   // gong: focus session complete
       toast('\u2705 Focus session complete! 5 min break.', 'success');
     } else {
       p.state = 'focus';
       p.remainingMs = POMODORO_FOCUS_MS;
       if (!STATE.playing) startPlayback();
+      playChime();   // gong: break complete, new focus begins
       toast('\u26A1 Break over. New 25 min focus started.', 'success');
     }
     updatePomodoroUI();
   }
 
   /* ==========================================================================
-   * 7e) AMBIENT MIXER — pink / rain / white noise layer under the carrier
+   * 7e) AMBIENT MIXER — pink / brown / rain / white noise under the carrier
    * ======================================================================== */
   function makeNoiseBuffer(ctx, kind) {
     const len = Math.max(48000, Math.floor(ctx.sampleRate * 2) || 48000);
@@ -794,62 +883,129 @@
         // keep float values in [-1,1]
         if (data[i] > 1) data[i] = 1; else if (data[i] < -1) data[i] = -1;
       }
+    } else if (kind === 'brown') {
+      // Brown (red/random-walk) noise: integrate white → 6 dB/octave roll-off,
+      // the deepest, warmest of the ambient family.
+      let lastOut = 0;
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1;
+        lastOut = (lastOut + BROWN_SLOPE * white) / (1 + BROWN_SLOPE);
+        data[i] = lastOut * BROWN_SLOPE_GAIN;
+        if (data[i] > 1) data[i] = 1; else if (data[i] < -1) data[i] = -1;
+      }
     } else {
       for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
     }
     return buffer;
   }
 
+  /** Cached noise buffers — Ctrl+layer toggles never regenerate the PCM data. */
+  function noiseBuffer(ctx, kind) {
+    if (STATE.ambBuffers[kind]) return STATE.ambBuffers[kind];
+    const buf = makeNoiseBuffer(ctx, kind);
+    STATE.ambBuffers[kind] = buf;
+    return buf;
+  }
+
+  function layerGain(kind) {
+    return STATE.nodes && STATE.nodes.ambGains ? STATE.nodes.ambGains[kind] : null;
+  }
+
+  /** Start one noise layer. The audio context is guaranteed to exist. */
+  function buildAmbientLayer(kind) {
+    const ctx = STATE.audioCtx;
+    if (!ctx || !layerGain(kind)) return;
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuffer(ctx, kind);
+      src.loop = true;
+      let head = src;
+      if (kind === 'pink') {
+        // Pink: ×2.5 makeup compensates the shaping/spectral energy loss. The
+        // makeup node is static (created once) — the teardown skips it.
+        const makeup = STATE.nodes.pinkMakeup;
+        if (makeup) { src.connect(makeup); head = null; }
+      } else if (kind === 'rain' && ctx.createBiquadFilter) {
+        // Rain: gentle low-pass at 1250 Hz softens the hiss into precipitation.
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 1250;
+        try { filter.Q.value = RAIN_FILTER_Q; } catch (_) {}
+        src.connect(filter);
+        head = filter;
+      }
+      // Pink/rain route via a filter/makeup; brown + white connect directly so
+      // their untouched spectra reach the layer gain.
+      if (head) head.connect(layerGain(kind));
+      src.start();
+      STATE.nodes.amb[kind] = { src, head };
+    } catch (_) { /* audio soft-fail */ }
+  }
+
+  /** Fully stop + disconnect one layer so no AudioNode stays routed. */
+  function tearDownAmbientLayer(kind) {
+    const entry = STATE.nodes && STATE.nodes.amb ? STATE.nodes.amb[kind] : null;
+    if (!entry) return;
+    try {
+      if (entry.src) {
+        entry.src.stop();
+        if (entry.src.disconnect) entry.src.disconnect();
+      }
+    } catch (_) {}
+    try {
+      if (entry.head && entry.head !== entry.src && entry.head.disconnect) entry.head.disconnect();
+    } catch (_) {}
+    delete STATE.nodes.amb[kind];
+  }
+
+  function applyAmbients(next) {
+    STATE.activeAmbients = next || new Set();
+    ensureContext();
+    if (!STATE.audioCtx || !STATE.nodes || !STATE.nodes.ambGains || !STATE.nodes.amb) { updateAmbientUI(); return; }
+    for (const kind of AMBIENT_KINDS) {
+      const active = STATE.activeAmbients.has(kind);
+      if (active && !STATE.nodes.amb[kind]) buildAmbientLayer(kind);
+      else if (!active && STATE.nodes.amb[kind]) tearDownAmbientLayer(kind);
+      // Micro fade in/out (FADE_S) — the layer level changes click-free
+      // instead of snapping, and the layer never exceeds its staged output.
+      try {
+        const g = layerGain(kind).gain;
+        const t = STATE.audioCtx ? STATE.audioCtx.currentTime : 0;
+        g.setTargetAtTime(active ? (AMBIENT_LEVELS[kind] || 0) : 0, t, FADE_S);
+      } catch (_) {}
+    }
+    // Engaging any layer starts the engine so a pure ambient mix (no pomodoro)
+    // still becomes audible under the binaural carrier.
+    if (STATE.activeAmbients.size > 0 && !STATE.playing) startPlayback();
+    updateAmbientUI();
+  }
+
+  /** Single-select convenience: setAmbient('off') clears ALL active layers. */
   function setAmbient(kind) {
     if (!kind || !(kind in AMBIENTS)) kind = 'off';
-    if (!STATE.pro) {
+    if (!hasAccess()) {
       toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
       openUpsell();
       updateAmbientUI();
       return;
     }
-    STATE.ambient = kind;
-    ensureContext();
-    if (STATE.nodes && STATE.nodes.ambGain) STATE.nodes.ambGain.gain.value = 0;
-    // Tear down the previous layer completely (stop + disconnect) so no
-    // AudioNode stays routed to the graph across repeated ambient toggles.
-    if (STATE.nodes && STATE.nodes.amb) {
-      const old = STATE.nodes.amb;
-      try {
-        if (old.src) {
-          old.src.stop();
-          if (old.src.disconnect) old.src.disconnect();
-        }
-      } catch (_) {}
-      try {
-        if (old.head && old.head !== old.src && old.head.disconnect) old.head.disconnect();
-      } catch (_) {}
-      STATE.nodes.amb = null;
-    }
-    if (kind === 'off') { updateAmbientUI(); return; }
-    try {
-      const src = STATE.audioCtx.createBufferSource();
-      src.buffer = makeNoiseBuffer(STATE.audioCtx, kind);
-      src.loop = true;
-      let head = src;
-      if (kind === 'rain' && STATE.audioCtx.createBiquadFilter) {
-        const filter = STATE.audioCtx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 1250;
-        src.connect(filter);
-        head = filter;
-      }
-      head.connect(STATE.nodes.ambGain);
-      src.start();
-      STATE.nodes.amb = { src, head, kind };
-      STATE.nodes.ambGain.gain.value = AMBIENT_LEVEL;
-    } catch (_) { /* audio soft-fail */ }
-    updateAmbientUI();
+    applyAmbients(kind === 'off' ? new Set() : new Set([kind]));
   }
 
+  /** Multi-layer toggle: 'off' closes EVERY layer; any other kind flips one. */
   function toggleAmbient(kind) {
-    if (kind !== 'off' && STATE.ambient === kind) setAmbient('off');
-    else setAmbient(kind);
+    if (!kind || !(kind in AMBIENTS)) kind = 'off';
+    if (!hasAccess()) {
+      toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
+      openUpsell();
+      updateAmbientUI();
+      return;
+    }
+    const next = new Set(STATE.activeAmbients);
+    if (kind === 'off') next.clear();
+    else if (next.has(kind)) next.delete(kind);
+    else next.add(kind);
+    applyAmbients(next);
   }
 
   function updateAmbientUI() {
@@ -857,7 +1013,13 @@
     try {
       const btns = els.ambRow.querySelectorAll ? els.ambRow.querySelectorAll('button[data-amb]') : [];
       Array.prototype.forEach.call(btns, (b) => {
-        b.classList.toggle('active', b.dataset.amb === STATE.ambient);
+        const k = b.dataset.amb;
+        // 'Off' is the only active button when NO layer is running; any active
+        // layer lights only its own button (multiple can be lit at once).
+        const active = k === 'off'
+          ? STATE.activeAmbients.size === 0
+          : STATE.activeAmbients.has(k);
+        b.classList.toggle('active', active);
       });
     } catch (_) {}
   }
@@ -881,7 +1043,12 @@
       els.beatMain.textContent = '\u0394 ' + Math.abs(f.right - f.left) + ' Hz \u00B7 Custom';
     } else {
       const m = MODES[STATE.mode];
-      els.beatMain.textContent = '\u0394 ' + m.hz + ' Hz \u00B7 ' + m.label + ' \u2014 ' + m.desc;
+      if (f.left === f.right) {
+        // Solfeggio tones are equal-phase monaural — no beat, show the carrier.
+        els.beatMain.textContent = f.left + ' Hz \u00B7 ' + m.label + ' \u2014 ' + m.desc;
+      } else {
+        els.beatMain.textContent = '\u0394 ' + m.hz + ' Hz \u00B7 ' + m.label + ' \u2014 ' + m.desc;
+      }
     }
     els.beatSub.textContent = 'Left ' + f.left + ' Hz \u00B7 Right ' + f.right + ' Hz';
   }
@@ -890,6 +1057,10 @@
     if (STATE.pro) {
       els.quota.textContent = 'PRO \u00B7 Unlimited';
       setHidden(els.buy, true);
+    } else if (trialActive()) {
+      // Living countdown badge — the trial is the default every user sees.
+      els.quota.textContent = 'Deneme: ' + fmtTrialRemaining() + ' kald\u0131';
+      setHidden(els.buy, false);
     } else {
       els.quota.textContent = 'License required';
       setHidden(els.buy, false);
@@ -1031,7 +1202,8 @@
   '.play{width:46px;height:46px;border-radius:50%;border:0;cursor:pointer;color:#06283d;display:flex;align-items:center;justify-content:center;' +
     'background:linear-gradient(135deg,#38bdf8,#818cf8);box-shadow:0 8px 22px rgba(56,189,248,.4);transition:transform .18s ease}' +
   '.play:hover{transform:scale(1.05)}.play:active{transform:scale(.92)}' +
-  '.modes{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;margin-bottom:9px;background:rgba(120,120,128,.22);border-radius:12px;padding:3px}' +
+  '.modes{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:5px;background:rgba(120,120,128,.22);border-radius:12px;padding:3px}' +
+  '.modes.modes-sol{grid-template-columns:repeat(2,1fr);margin-bottom:9px}' +
   '.modes button{border:0;background:transparent;color:#98989f;border-radius:10px;padding:6px 2px;cursor:pointer;' +
     'font-size:11.5px;font-weight:600;display:flex;flex-direction:column;gap:1px;align-items:center}' +
   '.modes button small{font-weight:500;font-size:9px;opacity:.75}' +
@@ -1051,18 +1223,11 @@
   '.fr-num{flex:none;width:48px;background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.14);color:#ebebf5;' +
     'border-radius:8px;padding:4px 2px;font-size:11.5px;text-align:center;outline:none;font-variant-numeric:tabular-nums;-moz-appearance:textfield}' +
   '.vol{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:0 2px;color:#98989f}' +
+  '.vol .vol-tag{flex:none;width:92px;font-size:10px;font-weight:600;color:#98989f;text-align:right}' +
   '.vol input[type=range]{-webkit-appearance:none;appearance:none;flex:1;min-width:0;height:3px;border-radius:999px;' +
     'background:linear-gradient(90deg,#38bdf8,#818cf8);outline:none;cursor:pointer}' +
   '.vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#fff;' +
     'cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4)}' +
-
-  /* ---- Deep Work Analytics ---- */
-  '.stats-box{margin-bottom:9px;padding:8px 10px;border-radius:14px;background:rgba(120,120,128,.22)}' +
-  '.stats-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font-size:11px;font-weight:600;color:#98989f}' +
-  '.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}' +
-  '.stat{background:rgba(0,0,0,.22);border-radius:10px;padding:6px 8px;text-align:center}' +
-  '.stat b{display:block;font-size:13px;font-weight:700;color:#38bdf8;font-variant-numeric:tabular-nums}' +
-  '.stat small{display:block;font-size:9.5px;color:#98989f;margin-top:1px}' +
 
   /* ---- Smart Pomodoro ---- */
   '.pomo-box{margin-bottom:9px;padding:8px 10px;border-radius:14px;background:rgba(120,120,128,.22)}' +
@@ -1078,7 +1243,7 @@
   /* ---- Ambient mixer ---- */
   '.amb-row{margin-bottom:9px;padding:8px 10px;border-radius:14px;background:rgba(120,120,128,.22)}' +
   '.amb-head{font-size:11px;font-weight:600;color:#98989f;margin-bottom:6px}' +
-  '.amb{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;background:rgba(120,120,128,.22);border-radius:12px;padding:3px}' +
+  '.amb{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;background:rgba(120,120,128,.22);border-radius:12px;padding:3px}' +
   '.amb button{border:0;background:transparent;color:#98989f;border-radius:10px;padding:6px 2px;cursor:pointer;' +
     'font-size:10.5px;font-weight:600}' +
   '.amb button.active{color:#fff;background:rgba(255,255,255,.16);box-shadow:0 2px 8px rgba(0,0,0,.3)}' +
@@ -1160,7 +1325,12 @@
       '<button type="button" data-mode="beta" class="active">Beta<small>14 Hz</small></button>' +
       '<button type="button" data-mode="alpha">Alpha<small>10 Hz</small></button>' +
       '<button type="button" data-mode="theta">Theta<small>6 Hz</small></button>' +
+      '<button type="button" data-mode="delta">Delta<small>2 Hz</small></button>' +
       '<button type="button" data-mode="gamma">Gamma<small>40 Hz</small></button>' +
+    '</div>' +
+    '<div class="modes modes-sol" role="group" aria-label="Solfeggio tone">' +
+      '<button type="button" data-mode="432">432Hz<small>Clarity</small></button>' +
+      '<button type="button" data-mode="528">528Hz<small>Reset</small></button>' +
     '</div>' +
     '<div class="frange">' +
       '<div class="frange-head">' +
@@ -1183,17 +1353,14 @@
       '<input class="vol-range" type="range" min="0" max="100" step="1" value="70" aria-label="Volume">' +
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2c0-1.77-.78-3.9-2.5-4v8c1.72-.1 2.5-2.23 2.5-4zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>' +
     '</label>' +
-
-    '<div class="stats-box">' +
-      '<div class="stats-head">' +
-        '<span>Deep Work Analytics</span>' +
-        '<span id="fb-stats-sessions" class="stats-sessions">0</span>' +
-      '</div>' +
-      '<div class="stats-grid">' +
-        '<div class="stat"><b id="fb-stats-today" class="stats-today">0s</b><small>Today</small></div>' +
-        '<div class="stat"><b id="fb-stats-week" class="stats-week">0s</b><small>This Week</small></div>' +
-      '</div>' +
-    '</div>' +
+    '<label class="vol">' +
+      '<span class="vol-tag">Binaural / Tone</span>' +
+      '<input class="vol-range vol-bin" type="range" min="0" max="100" step="1" value="50" aria-label="Binaural / Tone volume">' +
+    '</label>' +
+    '<label class="vol">' +
+      '<span class="vol-tag">Ambient Mixer</span>' +
+      '<input class="vol-range vol-amb" type="range" min="0" max="100" step="1" value="80" aria-label="Ambient Mixer volume">' +
+    '</label>' +
 
     '<div class="pomo-box">' +
       '<div class="pomo-head">' +
@@ -1211,6 +1378,7 @@
       '<div class="amb" role="group" aria-label="Ambient layer">' +
         '<button type="button" data-amb="off" class="active">Off</button>' +
         '<button type="button" data-amb="pink">Pink</button>' +
+        '<button type="button" data-amb="brown">Brown</button>' +
         '<button type="button" data-amb="rain">Rain</button>' +
         '<button type="button" data-amb="white">White</button>' +
       '</div>' +
@@ -1270,7 +1438,10 @@
     iconPlay: $('.icon-play'), iconPause: $('.icon-pause'),
     beatMain: $('.beat-main'), beatSub: $('.beat-sub'),
     modesWrap: $('.modes'),
+    modesSolWrap: $('.modes-sol'),
     vol: $('.vol-range'),
+    volBin: $('.vol-bin'),
+    volAmb: $('.vol-amb'),
     frSlL: $('.fr-sl-l'), frSlR: $('.fr-sl-r'),
     frNumL: $('.fr-num-l'), frNumR: $('.fr-num-r'),
     frReset: $('.frange-reset'), frBeat: $('.frange-beat'),
@@ -1279,9 +1450,6 @@
     pomoTime: $('.pomo-time') || $('#fb-pomo-time'),
     pomoState: $('.pomo-state') || $('#fb-pomo-state'),
     pomoStart: $('.pomo-start') || $('#fb-pomo-start'),
-    statsToday: $('.stats-today') || $('#fb-stats-today'),
-    statsWeek: $('.stats-week') || $('#fb-stats-week'),
-    statsSessions: $('.stats-sessions') || $('#fb-stats-sessions'),
     ambRow: $('.amb-row'),
 
     overlay: $('.overlay'),
@@ -1407,6 +1575,22 @@
       setMode(btn.dataset.mode);
     });
   }
+  if (els.modesSolWrap) {
+    els.modesSolWrap.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest
+        ? e.target.closest('button[data-mode]')
+        : null;
+      if (!btn || !btn.dataset || !btn.dataset.mode) return;
+      setMode(btn.dataset.mode);
+    });
+  }
+
+  if (els.volBin) {
+    els.volBin.addEventListener('input', () => setVolumeTarget('binaural', els.volBin.value));
+  }
+  if (els.volAmb) {
+    els.volAmb.addEventListener('input', () => setVolumeTarget('ambient', els.volAmb.value));
+  }
 
   function bindFrNum(input, which) {
     if (!input) return;
@@ -1460,11 +1644,20 @@
   function getPublicState() {
     return {
       pro: STATE.pro,
+      trial: {
+        days: TRIAL_DAYS,
+        active: trialActive(),
+        remainingMs: trialRemainingMs(),
+        endsAt: trialEndAt(),
+      },
       playing: STATE.playing,
       autoplayBlocked: STATE.autoplayBlocked,
       mode: STATE.mode,
       volume: STATE.volume,
-      ambient: STATE.ambient,
+      volumeBinaural: STATE.volBinaural,
+      volumeAmbient: STATE.volAmbient,
+      ambient: STATE.activeAmbients.size ? [...STATE.activeAmbients][0] : 'off',
+      ambients: [...STATE.activeAmbients],
       custom: STATE.custom ? { left: STATE.custom.left, right: STATE.custom.right } : null,
       pomodoro: {
         running: STATE.pomodoro.running,
@@ -1487,19 +1680,12 @@
           case 'pause': pausePlayback(); reply(); break;
           case 'toggle': if (STATE.playing) pausePlayback(); else startPlayback(); reply(); break;
           case 'setMode': if (msg.mode) setMode(msg.mode); reply(); break;
+          case 'setVolume': if (msg.which && msg.value !== undefined) setVolumeTarget(msg.which, msg.value); reply(); break;
           case 'setAmbient': setAmbient(msg.kind); reply(); break;
+          case 'toggleAmbient': toggleAmbient(msg.kind); reply(); break;
           case 'pomodoroStart': pomodoroStart(); reply(); break;
           case 'pomodoroStop': pomodoroReset(); reply(); break;
           case 'openPanel': togglePanel(true); reply(); break;
-          case 'analytics':
-            getStats()
-              .then((st) => {
-                try { sendResponse({ ok: true, state: { today: fmtDur(st.todayMs), week: fmtDur(st.weekMs), sessions: st.sessions } }); } catch (_) {}
-              })
-              .catch(() => {
-                try { sendResponse({ ok: false, error: 'analytics_unavailable' }); } catch (_) {}
-              });
-            return true; // async response channel
           default: sendResponse({ ok: false, error: 'unknown_cmd' });
         }
       } catch (err) {
@@ -1517,6 +1703,8 @@
       if (!document.hidden && !STATE.verifying) {
         try { const k = localStorage.getItem(LS.key); if (k) { applyLicense(k, { silent: true }); } } catch (_) {}
       }
+      // Live-lock a running session the instant the trial window expires.
+      if (!document.hidden) trialWatchdog();
     });
   }
   if (typeof window !== 'undefined' && window.addEventListener) {
@@ -1543,7 +1731,7 @@
    * ======================================================================== */
   function setMode(mode) {
     if (!MODES[mode]) return;
-    if (!STATE.pro) {
+    if (!hasAccess()) {
       toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
       openUpsell();
       return;
@@ -1586,6 +1774,22 @@
     },
     get volume() { return STATE.volume; },
 
+    /* Independent volume stages (persisted) */
+    setVolumeBinaural(pct) { setVolumeTarget('binaural', pct); },
+    setVolumeAmbient(pct) { setVolumeTarget('ambient', pct); },
+    get volumeBinaural() { return STATE.volBinaural; },
+    get volumeAmbient() { return STATE.volAmbient; },
+
+    /* 3-day frictionless trial status */
+    get trial() {
+      return {
+        days: TRIAL_DAYS,
+        active: trialActive(),
+        remainingMs: trialRemainingMs(),
+        endsAt: trialEndAt(),
+      };
+    },
+
     openPro: openUpsell,
     copyBtcAddress,
 
@@ -1597,7 +1801,9 @@
     getState: getPublicState,
     get state() { return getPublicState(); },
     setAmbient,
-    get ambient() { return STATE.ambient; },
+    toggleAmbient,
+    get ambient() { return STATE.activeAmbients.size ? [...STATE.activeAmbients][0] : 'off'; },
+    get ambients() { return [...STATE.activeAmbients]; },
     pomodoro: Object.freeze({
       start: pomodoroStart,
       stop: pomodoroReset,
@@ -1610,10 +1816,6 @@
           completed: STATE.pomodoro.completed,
         };
       },
-    }),
-    analytics: Object.freeze({
-      getStats,
-      refresh: refreshStats,
     }),
     togglePanel,
   });
@@ -1645,12 +1847,6 @@
   updatePomodoroUI();
   updateAmbientUI();
 
-  // Deep Work Analytics: load stored daily totals and start the 1s tracker
-  loadAnalytics()
-    .then(() => { renderStats(); refreshStats(); })
-    .catch(() => {});
-  try { if (typeof setInterval === 'function') STATE.analytics.interval = setInterval(analyticsTick, 1000); } catch (_) {}
-
   // Restore saved FAB position
   if (els.fab) {
     var saved = loadFabPos();
@@ -1677,6 +1873,15 @@
       }, 200);
     });
   }
+
+  // Restore persisted volume stages + stamp/build the trial window
+  bootstrapState();
+
+  // Mid-session expiry watchdog — a running session locks the instant the
+  // 72h window passes, without needing a reload.
+  try {
+    setInterval(trialWatchdog, TRIAL_CHECK_MS);
+  } catch (_) {}
 
   bootVerify();            // server-side license verification on every page load
 })();

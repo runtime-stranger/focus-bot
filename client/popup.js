@@ -8,13 +8,6 @@
 
   const $ = (id) => document.getElementById(id);
 
-  function fmtDur(ms) {
-    if (!ms || ms <= 0) return '0s';
-    if (ms < 60000) return Math.floor(ms / 1000) + 's';
-    if (ms < 3600000) return Math.floor(ms / 60000) + 'm';
-    return (ms / 3600000).toFixed(1) + 'h';
-  }
-
   function fmtClock(ms) {
     const total = Math.max(0, Math.floor(ms / 1000));
     const m = Math.floor(total / 60);
@@ -62,13 +55,19 @@
   const els = {
     dot: $('dot'), chip: $('pro-chip'),
     play: $('btn-play'), pause: $('btn-pause'),
-    modes: $('modes'), amb: $('amb'),
+    modes: $('modes'), modesSol: $('modes-sol'), amb: $('amb'),
+    volTone: $('vol-tone'), volAmb: $('vol-amb'),
     pomo: $('btn-pomo'), pomoStop: $('btn-pomo-stop'),
-    st: { state: $('st-state'), time: $('st-time'), today: $('st-today'), week: $('st-week') },
+    st: { state: $('st-state'), time: $('st-time'), trial: $('st-trial') },
     noWidget: $('no-widget'),
   };
 
   let lastState = null;
+
+  function fmtTrial(ms) {
+    const h = Math.max(1, Math.ceil((ms || 0) / 3600000));
+    return h >= 24 ? Math.floor(h / 24) + ' day(s)' : h + ' hour(s)';
+  }
 
   function render(state) {
     if (!state) return;
@@ -76,12 +75,25 @@
     els.dot.classList.toggle('on', !!state.pro);
     els.chip.style.display = state.pro ? '' : 'none';
 
-    // Mode active highlight
-    Array.prototype.forEach.call(els.modes.querySelectorAll('button'), (b) => {
+    // Mode active highlight (binaural + solfeggio grids)
+    const allModes = els.modes.querySelectorAll('button');
+    Array.prototype.forEach.call(allModes, (b) => {
       b.classList.toggle('active', b.dataset.mode === state.mode);
     });
+    Array.prototype.forEach.call(els.modesSol.querySelectorAll('button'), (b) => {
+      b.classList.toggle('active', b.dataset.mode === state.mode);
+    });
+
+    // Volume sliders — mirror persisted stages from the content script
+    els.volTone.value = String(Math.round((state.volumeBinaural || 0) * 100));
+    els.volAmb.value = String(Math.round((state.volumeAmbient || 0) * 100));
+
+    // Ambient layers can be active independently; 'Off' lights only when NO layer
+    // is running, each active layer lights its own button (multiple possible).
+    const activeAmbs = state.ambients || (state.ambient && state.ambient !== 'off' ? [state.ambient] : []);
     Array.prototype.forEach.call(els.amb.querySelectorAll('button'), (b) => {
-      b.classList.toggle('active', b.dataset.amb === state.ambient);
+      const k = b.dataset.amb;
+      b.classList.toggle('active', k === 'off' ? activeAmbs.length === 0 : activeAmbs.indexOf(k) !== -1);
     });
 
     els.pomo.textContent = state.pomodoro && state.pomodoro.running ? '⏸ ' + (state.pomodoro.state === 'focus' ? 'Focus' : 'Break') : '▶ Start';
@@ -89,6 +101,10 @@
     els.st.time.textContent = state.pomodoro && state.pomodoro.running
       ? fmtClock(state.pomodoro.remainingMs)
       : '—';
+    const t = state.trial;
+    els.st.trial.textContent = state.pro
+      ? 'PRO · Unlimited'
+      : (t && t.active ? fmtTrial(t.remainingMs) + ' left' : 'Expired');
   }
 
   async function refresh() {
@@ -96,21 +112,9 @@
     if (res && res.ok && res.state) {
       render(res.state);
       els.noWidget.classList.add('hidden');
-      refreshStats();
     } else {
       els.noWidget.classList.remove('hidden');
     }
-  }
-
-  async function refreshStats() {
-    // Daily / weekly totals are pulled from the content-script analytics API.
-    try {
-      const res = await send('analytics');
-      if (res && res.ok && res.state) {
-        els.st.today.textContent = res.state.today || '—';
-        els.st.week.textContent = res.state.week || '—';
-      }
-    } catch (_) { /* non-fatal */ }
   }
 
   function bind() {
@@ -129,10 +133,22 @@
       await send('setMode', { mode: btn.dataset.mode });
       refresh();
     });
+    els.modesSol.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-mode]');
+      if (!btn) return;
+      await send('setMode', { mode: btn.dataset.mode });
+      refresh();
+    });
+    els.volTone.addEventListener('input', async () => {
+      await send('setVolume', { which: 'binaural', value: Number(els.volTone.value) });
+    });
+    els.volAmb.addEventListener('input', async () => {
+      await send('setVolume', { which: 'ambient', value: Number(els.volAmb.value) });
+    });
     els.amb.addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-amb]');
       if (!btn) return;
-      await send('setAmbient', { kind: btn.dataset.amb });
+      await send('toggleAmbient', { kind: btn.dataset.amb });
       refresh();
     });
   }

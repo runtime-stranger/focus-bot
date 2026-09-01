@@ -1,8 +1,8 @@
 /*!
  * FocusBot release packager — zero-dependency STORED ZIP writer.
  *
- * Rebuilds the Chrome Web Store upload bundle `focus-bot-webstore-v1.3.0.zip`
- * from the latest `client/` sources so the store artifact always matches the
+ * Rebuilds the load-unpacked extension bundle `focus-bot-extension.zip`
+ * from the latest `client/` sources so the artifact always matches the
  * repository. Only production store files are included — no tests, no .git,
  * no README, no node_modules.
  *
@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = '1.3.0';
 const CLIENT = join(ROOT, 'client');
-const OUT = join(ROOT, `focus-bot-webstore-v${VERSION}.zip`);
+const OUT = join(ROOT, 'focus-bot-extension.zip');
 
 // Production store files only — entry order matters for a deterministic archive.
 const ENTRIES = [
@@ -105,6 +105,8 @@ function zip(entries) {
   const central = Buffer.concat(centralParts);
   const end = Buffer.concat([
     u32(0x06054b50),
+    u16(0),                 // number of this disk
+    u16(0),                 // disk where central directory starts
     u16(entries.length), u16(entries.length),
     u32(central.length),
     u32(offset),

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FocusBot - Autonomous Deep Work Suite",
-  "version": "1.3.0",
-  "description": "Neural Frequency Synthesizer + Smart Pomodoro + Deep Work Analytics. On-chain licensed (12 EUR/year, Bitcoin).",
+  "version": "1.4.0",
+  "description": "Neural Frequency Synthesizer + Smart Pomodoro + Ambient Mixer. 3-day free trial, then on-chain licensed (12 EUR/year, Bitcoin).",
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

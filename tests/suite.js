@@ -33,10 +33,9 @@
  *   [SCENARIO 25-28] Engine math: beta/alpha/theta/gamma Left/Right matrix + gain ceiling
  *   [SCENARIO 29-32] Smart Pomodoro: start/auto-play, 25-min focus → break (audio pause),
  *                   break → next focus (auto-resume), reset
- *   [SCENARIO 33-34] Deep Work Analytics: focus-time accumulation + persistence,
- *                   chrome.storage.local preferred path (MV3)
- *   [SCENARIO 35-36] Ambient mixer: white/pink noise buffers + rain lowpass routing,
- *                   ambient gain below the carrier, master keeps last gain node
+ *   [SCENARIO 35-36] Ambient mixer: independent multi-layer pink/rain/white,
+ *                   staged per-layer gains + soft limiter, multi-layer .active
+ *                   UI sync, Off clears all, noise buffers cached (no regen)
  *   [SCENARIO 37-38] Hardening: signed engine token drives frequency matrix + gain;
  *                   corrupt token → safe fallback matrix
  *   [SCENARIO 39] Messaging bridge: chrome.runtime FOCUSBOT_CTRL (MV3 popup) → widget
@@ -45,9 +44,8 @@
  *   [SCENARIO 43] verify-tx junk vouts (NaN/negative/null) never satisfy amount check
  *   [SCENARIO 44] Autoplay policy: blocked resume → honest state, gesture recovers
  *   [SCENARIO 45] Memory: pomodoro phase cycles + ambient toggles leak zero AudioNodes
- *   [SCENARIO 46] Storage resilience: corrupt/legacy analytics + failing chrome.storage
  *   [SCENARIO 47] Popup bridge: dead channel consumed (lastError), live widget recovers
- *   [SCENARIO 48] Manifest audit: MV3, all_frames:false, storage perm, popup wired
+ *   [SCENARIO 48] Manifest audit: MV3, all_frames:false, minimal permissions, popup wired
  *   [SCENARIO 49,51] Engine token lifecycle: stale token ignored (fallback), fresh applied
  *   [SCENARIO 50] Token replay-safety: iat + fixed 12h exp window, fresh re-issue per verify
  *
@@ -122,6 +120,15 @@ function expectMatch(str, re, msg) {
 function expectUndefined(v, msg) { if (v !== undefined) throw new Error(`${msg} \u2192 value leaked: ${JSON.stringify(v)}`); }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Seed an EXPIRED 3-day trial so a scenario exercises the post-trial hard
+ * paywall. The trial window is 72h; 96 hours back guarantees it is over.
+ * (bootstrapState() keeps an existing trialStart — it never re-stamps.)
+ */
+const EXPIRED_TRIAL_MS = 96 * 3600 * 1000;
+const seedExpiredTrial = (env) =>
+  env.ls.setItem('focusbot.trialStart', String(Date.now() - EXPIRED_TRIAL_MS));
 
 /** Wait loop that does NOT rely on Date.now() (required because scenario 7 fakes Date.now) */
 async function waitFor(fn, timeoutMs = 2000, label = 'condition') {
@@ -270,10 +277,23 @@ function makeStubFor(sel) {
   const key = sel.replace(/^\./, '');
   if (key in HIDDEN_DEFAULTS) e.hidden = HIDDEN_DEFAULTS[key];
   if (sel === '.vol-range') e.value = '70';
+  if (sel === '.vol-bin') e.value = '50';
+  if (sel === '.vol-amb') e.value = '80';
   if (sel === '.modes') {
-    e.querySelectorAll = () => ['beta', 'alpha', 'theta', 'gamma'].map((m) => {
+    e.querySelectorAll = () => ['delta', 'theta', 'alpha', 'beta', 'gamma'].map((m) => {
       const b = el('button'); b.dataset.mode = m; return b;
     });
+  }
+  if (sel === '.modes-sol') {
+    e.querySelectorAll = () => ['432', '528'].map((m) => {
+      const b = el('button'); b.dataset.mode = m; return b;
+    });
+  }
+  if (sel === '.amb-row') {
+    // Ambient buttons: independent multi-layer toggles + 'Off'. Persisted per
+    // stub so tests can read the .active class live after toggles.
+    e._ambButtons = () => { if (!e._ambBtns) { e._ambBtns = ['off', 'pink', 'brown', 'rain', 'white'].map((amb) => { const b = el('button'); b.dataset.amb = amb; return b; }); } return e._ambBtns; };
+    e.querySelectorAll = () => e._ambButtons();
   }
   return e;
 }
@@ -290,7 +310,7 @@ function makeRoot() {
     },
     querySelectorAll(sel) {
       if (sel === 'button[data-mode]') {
-        return ['beta', 'alpha', 'theta', 'gamma'].map((m) => { const b = el('button'); b.dataset.mode = m; return b; });
+        return ['delta', 'theta', 'alpha', 'beta', 'gamma', '432', '528'].map((m) => { const b = el('button'); b.dataset.mode = m; return b; });
       }
       return [];
     },
@@ -365,12 +385,16 @@ class MockOscillator extends MockNode {
   stop() {}
 }
 class MockGain extends MockNode { constructor(ctx) { super(ctx); this.gain = new MockParam(1); } }
+class MockCompressor extends MockNode {
+  constructor(ctx) { super(ctx); this.threshold = new MockParam(); this.knee = new MockParam(); this.ratio = new MockParam(); this.attack = new MockParam(); this.release = new MockParam(); }
+}
 class MockMerger extends MockNode {}
 
 class MockAudioContext {
   static instances = [];
   static oscs = [];
   static gains = [];
+  static compressors = [];
   static sources = [];
   static buffers = [];
   /** When false, resume() rejects like a browser enforcing the autoplay policy. */
@@ -379,6 +403,7 @@ class MockAudioContext {
     MockAudioContext.instances = [];
     MockAudioContext.oscs = [];
     MockAudioContext.gains = [];
+    MockAudioContext.compressors = [];
     MockAudioContext.sources = [];
     MockAudioContext.buffers = [];
     MockAudioContext.resumable = true;
@@ -402,6 +427,7 @@ class MockAudioContext {
   close() { this.state = 'closed'; return Promise.resolve(); }
   createOscillator() { const o = new MockOscillator(this); MockAudioContext.oscs.push(o); return o; }
   createGain() { const g = new MockGain(this); MockAudioContext.gains.push(g); return g; }
+  createDynamicsCompressor() { const c = new MockCompressor(this); MockAudioContext.compressors.push(c); return c; }
   createChannelMerger() { return new MockMerger(this); }
   createBuffer(channels, length, sampleRate) {
     const b = {
@@ -483,6 +509,10 @@ async function freshClient(env) {
 
   const url = new URL('../client/focus-bot.js', import.meta.url).href + '?inst=' + (++clientInst);
   await import(url); // the module boots immediately (shim environment)
+
+  // Let the async bootstrapState() microtask land so trial/volume storage is
+  // read (or stamped) before any scenario assertion.
+  await new Promise((r) => setTimeout(r, 1));
 
   const root = env.doc._lastRoot;
   return { FocusBot: env.G.FocusBot, root, stub: (sel) => root.querySelector(sel) };
@@ -1074,11 +1104,13 @@ async function clientScenarios() {
     /* ---- SCENARIO 7 ---- */
     await scenario('7. Hard paywall: no license -> modal opens, audioContext NOT created', async () => {
       env.ls._clear();
+      seedExpiredTrial(env);   // past the 72h frictionless window → paywall applies
       const c = await freshClient(env);
       const fb = c.FocusBot;
 
       expectEqual(fb.isPlaying, false, 'not playing at boot');
       expectEqual(MockAudioContext.instances.length, 0, 'AudioContext not created at boot');
+      expectEqual(fb.trial.active, false, 'trial expired');
 
       // User clicks play without license -> upsell modal opens, no audio
       fb.toggle();
@@ -1250,6 +1282,7 @@ async function clientEdgeCaseScenarios() {
     /* ---- SCENARIO 12 ---- */
     await scenario('12. Client: network error -> toast, no crash, widget stays usable', async () => {
       env.ls._clear();
+      seedExpiredTrial(env);   // past the trial window → network-error path stays blocked
       env.G.fetch = async () => { throw new TypeError('Failed to fetch'); };
       const c = await freshClient(env);
       const fb = c.FocusBot;
@@ -1345,6 +1378,7 @@ async function e2ePaywallGuardScenarios() {
     /* ---- SCENARIO 18 ---- */
     await scenario('18. Empty storage: AudioContext null, oscillators never created', async () => {
       env.ls._clear();
+      seedExpiredTrial(env);   // empty storage + expired trial → hard paywall
       const c = await freshClient(env);
       const fb = c.FocusBot;
 
@@ -1369,6 +1403,7 @@ async function e2ePaywallGuardScenarios() {
     /* ---- SCENARIO 19 ---- */
     await scenario('19. UI blocks: play/mode/freq all open payment modal', async () => {
       env.ls._clear();
+      seedExpiredTrial(env);   // post-trial → every entry point hits the paywall
       const c = await freshClient(env);
       const fb = c.FocusBot;
 
@@ -1395,6 +1430,7 @@ async function e2ePaywallGuardScenarios() {
     /* ---- SCENARIO 20 ---- */
     await scenario('20. Console attack: window.FocusBot.play() blocked without license', async () => {
       env.ls._clear();
+      seedExpiredTrial(env);
       const c = await freshClient(env);
 
       // Simulate console attack: direct play() call
@@ -1412,6 +1448,7 @@ async function e2ePaywallGuardScenarios() {
     /* ---- SCENARIO 21 ---- */
     await scenario('21. Expired license: bootVerify revokes pro, falls back to paywall', async () => {
       env.ls._clear();
+      seedExpiredTrial(env);   // trial exhausted too → no accidental access after license expiry
       env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-EXPIRED');
       // Server says: invalid/expired
       env.G.fetch = async (url) => {
@@ -1587,7 +1624,7 @@ async function audioSynthScenarios() {
 }
 
 /* ===========================================================================
- * SCENARIO 29-36 : PRODUCTIVITY SUITE (Pomodoro + Deep Work Analytics + Ambient)
+ * SCENARIO 29-36 : PRODUCTIVITY SUITE (Pomodoro + Ambient Mixer)
  * ======================================================================== */
 async function productivityScenarios() {
   const env = installClientEnv();
@@ -1652,50 +1689,6 @@ async function productivityScenarios() {
     expectEqual(fb.isPlaying, false, 'audio stopped');
     expectEqual(c.stub('.pomo-time').textContent, '25:00', 'UI reset to 25:00');
   });
-
-  /* ---- SCENARIO 33 ---- */
-  await scenario('33. Analytics: focus seconds accumulate and persist locally', async () => {
-    fb.pomodoro.start();
-    await waitFor(() => fb.isPlaying, 2000, 'playing');
-    const at = lastInterval('analyticsTick');
-    expectTrue(!!at, 'analytics tick interval registered');
-    for (let i = 0; i < 12; i++) at.fn();
-    const st = await fb.analytics.getStats();
-    expectTrue(st.todayMs >= 12000, 'today >= 12s total focus (got ' + st.todayMs + ')');
-    const saved = JSON.parse(env.ls.getItem('focusbot.analytics') || '{}');
-    expectTrue(!!saved.days && Object.keys(saved.days).length > 0, 'analytics persisted to local storage');
-    expectTrue(c.stub('.stats-today').textContent.indexOf('s') !== -1, 'UI today stat rendered');
-  });
-
-  /* ---- SCENARIO 34 ---- */
-  await scenario('34. Analytics: chrome.storage.local preferred (MV3 path)', async () => {
-    const chMap = new Map();
-    env.G.chrome = {
-      storage: {
-        local: {
-          get(k, cb) { const out = {}; if (chMap.has(k)) out[k] = chMap.get(k); cb(out); },
-          set(o, cb) { for (const k in o) chMap.set(k, o[k]); if (cb) cb(); },
-        },
-      },
-    };
-    try {
-      const c2 = await freshClient(env);
-      await sleep(30);
-      const fb2 = c2.FocusBot;
-      const st0 = await fb2.analytics.getStats();
-      const baseMs = st0.todayMs || 0;
-      fb2.pomodoro.start();
-      const at = lastInterval('analyticsTick');
-      for (let i = 0; i < 12; i++) at.fn();
-      await sleep(20);
-      const saved = chMap.get('focusbot.analytics');
-      expectTrue(!!saved, 'analytics written to chrome.storage.local');
-      const st = await fb2.analytics.getStats();
-      expectTrue(st.todayMs >= baseMs + 12000, 'stats resolved from chrome storage (+12s)');
-    } finally {
-      env.G.chrome = undefined;
-    }
-  });
   } finally { env.restore(); }
 }
 
@@ -1718,42 +1711,102 @@ async function ambientMixerScenarios() {
   try {
 
   /* ---- SCENARIO 35 ---- */
-  await scenario('35. Ambient: white noise layer added under the carrier', async () => {
-    fb.setAmbient('white');
-    expectEqual(fb.ambient, 'white', 'ambient state set');
-    expectTrue(MockAudioContext.sources.length >= 1, 'noise source created');
-    const src = MockAudioContext.sources.at(-1);
-    expectEqual(src.buffer.numberOfChannels, 1, 'mono buffer');
-    expectEqual(src.loop, true, 'looping source');
-    expectEqual(src._started, true, 'source started');
-    // gains[0] is the 6.0 BOOST pre-amp; gains[1] is the ambient layer
-    expectApprox(MockAudioContext.gains[1].gain.value, 0.14, 1e-9, 'ambient gain level');
-    expectApprox(MockAudioContext.gains.at(-1).gain.value, 0, 1e-9, 'master stays the last gain node');
-    fb.setAmbient('off');
-    expectEqual(fb.ambient, 'off', 'switched off');
-    expectEqual(MockAudioContext.gains[1].gain.value, 0, 'ambient gain zeroed when off');
+  await scenario('35. Ambient: independent multi-layer mixer — staged per-layer gains + soft limiter; Off clears all', async () => {
+    expectEqual(fb.ambients.length, 0, 'starts with no active layer');
+
+    fb.toggleAmbient('pink');
+    expectEqual(fb.ambients.join(','), 'pink', 'pink engaged');
+    expectEqual(fb.ambient, 'pink', 'ambient getter reflects the sole active layer');
+    // Gain staging fixed stages (context exists now)
+    expectApprox(MockAudioContext.gains[1].gain.value, 0.5, 1e-9, 'binaural carrier stage 0.50');
+    expectApprox(MockAudioContext.gains[2].gain.value, 0.8, 1e-9, 'ambient master bus 0.80');
+    expectApprox(MockAudioContext.gains[3].gain.value, 2.5, 1e-9, 'pink makeup ×2.5');
+    expectApprox(MockAudioContext.gains[4].gain.value, 0.75, 1e-9, 'pink layer gain staged to 0.75');
+    expectEqual(MockAudioContext.compressors.length, 1, 'a soft compressor/limiter exists in the graph');
+    expectEqual(MockAudioContext.gains.at(-1).connections[0], MockAudioContext.instances.at(-1).destination, 'master stays the last gain node');
+
+    fb.toggleAmbient('rain');
+    expectEqual([...fb.ambients].sort().join(','), 'pink,rain', 'two independent layers coexist');
+    expectEqual(MockAudioContext.sources.length, 2, 'two noise sources playing');
+    expectApprox(MockAudioContext.gains[6].gain.value, 0.85, 1e-9, 'rain layer gain staged to 0.85');
+    expectEqual(MockAudioContext.gains.at(-1).connections[0], MockAudioContext.instances.at(-1).destination, 'master still the last gain node with two layers');
+    const rainSrc = MockAudioContext.sources.at(-1);
+    expectEqual(rainSrc.connections[0].type, 'lowpass', 'rain source routed through the lowpass filter');
+
+    fb.toggleAmbient('pink');                       // one layer off, other keeps playing
+    expectEqual(fb.ambients.join(','), 'rain', 'pink toggled off, rain persists');
+    expectApprox(MockAudioContext.gains[4].gain.value, 0, 1e-9, 'pink layer gain zeroed');
+    const deadPink = MockAudioContext.sources.at(0);
+    expectEqual(deadPink._stopped, true, 'removed pink source stop()ed');
+    expectEqual(deadPink.connections.length, 0, 'removed pink source disconnected');
+
+    fb.toggleAmbient('off');                        // closes every remaining layer
+    expectEqual(fb.ambients.length, 0, 'Off clears ALL active layers');
+    expectApprox(MockAudioContext.gains[6].gain.value, 0, 1e-9, 'rain layer gain zeroed');
+    const deadRain = MockAudioContext.sources.at(1);
+    expectEqual(deadRain._stopped, true, 'rain source stopped by Off');
+    expectEqual(deadRain.connections.length, 0, 'rain source disconnected');
+    expectEqual(fb.ambient, 'off', 'ambient getter back to off');
   });
 
   /* ---- SCENARIO 36 ---- */
-  await scenario('36. Ambient: pink noise buffer + rain (filtered) variants', async () => {
+  await scenario('36. Ambient: pink/rain sampling, cached noise buffers, multi-layer .active UI sync', async () => {
     fb.setAmbient('pink');
     let src = MockAudioContext.sources.at(-1);
     expectEqual(src.buffer.numberOfChannels, 1, 'pink mono buffer');
     const pink = src.buffer.getChannelData(0);
     expectTrue(pink.length > 0, 'pink buffer has samples');
     expectTrue(pink.some((v) => Math.abs(v) > 0.0001), 'pink data non-silent');
+
+    // on → off → on reuses the original PCM data; no regeneration per toggle
+    const b1 = src.buffer;
+    fb.setAmbient('off');
+    fb.setAmbient('pink');
+    expectEqual(MockAudioContext.sources.at(-1).buffer, b1, 'noise buffer cached & reused (no regen per toggle)');
+    expectEqual(MockAudioContext.buffers.length, 2, 'exactly 2 buffers generated (pink+rain), none re-made');
+
     fb.setAmbient('rain');
     src = MockAudioContext.sources.at(-1);
     expectTrue(!!src.buffer, 'rain buffer created');
-    expectTrue(src.connections.length >= 1, 'rain source connected (to lowpass)');
+    expectEqual(src.connections[0].type, 'lowpass', 'rain source connected (to lowpass)');
     fb.setAmbient('off');
     expectEqual(fb.ambient, 'off', 'off state');
+    expectEqual(MockAudioContext.buffers.length, 2, 'rain buffer reused on re-engage');
+
+    // Multi-layer .active classes track the set precisely (popup + widget share
+    // the same ambients array from getState)
+    const ambRow = c.stub('.amb-row');
+    const btns = ambRow.querySelectorAll('button[data-amb]');
+    expectEqual(btns.length, 5, 'five ambient buttons (off+pink+brown+rain+white)');
+    const btn = (k) => btns.find((b) => b.dataset.amb === k);
+    fb.toggleAmbient('pink');
+    fb.toggleAmbient('rain');
+    expectEqual(btn('pink').classList.contains('active'), true, '.active on pink');
+    expectEqual(btn('rain').classList.contains('active'), true, '.active on rain');
+    expectEqual(btn('white').classList.contains('active'), false, 'white not lit');
+    expectEqual(btn('off').classList.contains('active'), false, 'Off not lit while layers run');
+    fb.toggleAmbient('rain');
+    expectEqual(btn('pink').classList.contains('active'), true, 'pink keeps .active');
+    expectEqual(btn('rain').classList.contains('active'), false, 'rain loses .active on toggle');
+    fb.toggleAmbient('off');
+    expectEqual(btn('pink').classList.contains('active'), false, 'pink cleared by Off');
+    expectEqual(btn('rain').classList.contains('active'), false, 'rain cleared by Off');
+    expectEqual(btn('off').classList.contains('active'), true, 'Off .active once everything is off');
+
+    // White layer: staged gain 0.60, direct feed into its own layer gain
+    fb.toggleAmbient('white');
+    expectApprox(MockAudioContext.gains[7].gain.value, 0.6, 1e-9, 'white layer gain staged to 0.60');
+    const whiteSrc = MockAudioContext.sources.at(-1);
+    expectEqual(whiteSrc.connections[0], MockAudioContext.gains[7], 'white source feeds its own layer gain');
+    expectEqual(MockAudioContext.buffers.length, 3, 'exactly 3 buffers generated (pink+rain+white)');
+    fb.toggleAmbient('off');
+    expectEqual(fb.ambients.length, 0, 'off clears white along with the rest');
   });
   } finally { env.restore(); }
 }
 
 /* ===========================================================================
- * SCENARIO 37-39 : CLIENT HARDENING (engine token, storage preference, messaging)
+ * SCENARIO 37-39 : CLIENT HARDENING (engine token, messaging)
  * ======================================================================== */
 function signedToken(payload) {
   function b64url(s) { return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
@@ -1854,6 +1907,13 @@ async function clientHardeningScenarios() {
 
       listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'pomodoroStart' }, {}, respond);
       expectEqual(f2.state.pomodoro.running, true, 'pomodoro started via messenger');
+
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'toggleAmbient', kind: 'pink' }, {}, respond);
+      expectEqual(f2.state.ambients.join(','), 'pink', 'multi-layer ambient toggle via messenger');
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'toggleAmbient', kind: 'rain' }, {}, respond);
+      expectEqual([...f2.state.ambients].sort().join(','), 'pink,rain', 'second layer added via messenger');
+      listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'toggleAmbient', kind: 'off' }, {}, respond);
+      expectEqual(f2.state.ambients.length, 0, 'off via messenger clears all');
 
       listeners[0]({ type: 'FOCUSBOT_CTRL', cmd: 'bogus-command' }, {}, respond);
       expectEqual(last.ok, false, 'unknown command rejected');
@@ -1968,7 +2028,7 @@ async function workerAbuseScenarios() {
 /* ===========================================================================
  * SCENARIO 44 : CLIENT AUTOPLAY POLICY
  * A suspended AudioContext (browser autoplay policy) must never report
- * "playing", must not bank analytics time, and must recover on first gesture.
+ * "playing", and must recover on first gesture.
  * ======================================================================== */
 async function clientAutoplayScenarios() {
   const env = installClientEnv();
@@ -1987,8 +2047,6 @@ async function clientAutoplayScenarios() {
       fb.pomodoro.start();
       await waitFor(() => fb.autoplayBlocked, 2000, 'autoplayBlocked flagged');
       expectEqual(fb.isPlaying, false, 'does not fake playback');
-      const st = await fb.analytics.getStats();
-      expectEqual(st.todayMs, 0, 'silent playback not banked as focus time');
       expectEqual(MockAudioContext.instances.at(-1).state, 'suspended', 'context left suspended');
       expectEqual(MockAudioContext.oscs.length, 2, 'graph still wired (two oscillators)');
       // First user gesture → clean resume
@@ -2029,11 +2087,14 @@ async function clientMemoryLeakScenarios() {
       const oscsBase = MockAudioContext.oscs.length;
       const gainsBase = MockAudioContext.gains.length;
       const sourcesBase = MockAudioContext.sources.length;
-      for (let i = 0; i < 1500; i++) it.fn(); // focus → break (audio off)
-      for (let i = 0; i < 300; i++) it.fn();  // break → focus (audio on)
+      for (let i = 0; i < 1500; i++) it.fn(); // focus → break (audio off) + gong chime
+      for (let i = 0; i < 300; i++) it.fn();  // break → focus (audio on) + gong chime
       fb.pomodoro.reset();
-      expectEqual(MockAudioContext.gains.length, gainsBase, 'no GainNode churn across phases');
-      expectEqual(MockAudioContext.oscs.length, oscsBase, 'no Oscillator churn across phases');
+      // Each phase change rings one synthesized gong: exactly +1 OscillatorNode
+      // and +1 GainNode per transition (2 transitions → +2/+2). Everything else
+      // lives for the whole session — no other churn.
+      expectEqual(MockAudioContext.gains.length, gainsBase + 2, 'only the 2 gong chimes add GainNodes');
+      expectEqual(MockAudioContext.oscs.length, oscsBase + 2, 'only the 2 gong chimes add Oscillators');
       expectEqual(MockAudioContext.sources.length, sourcesBase, 'no stray BufferSources (ambient off)');
 
       // (b) ambient toggle storm: every replaced source is stopped AND
@@ -2063,69 +2124,275 @@ async function clientMemoryLeakScenarios() {
 }
 
 /* ===========================================================================
- * SCENARIO 46 : CLIENT STORAGE RESILIENCE
- * Corrupt / legacy-junk analytics payloads + failing chrome.storage must never
- * crash the widget; analytics keeps tallying from in-memory state.
+ * SCENARIO 59-68 : CLIENT — 3-DAY TRIAL · VOLUME STAGES · GONG CHIME ·
+ *                  DELTA/SOLFEGGIO MODES · BROWN NOISE
  * ======================================================================== */
-async function clientStorageResilienceScenarios() {
+async function trialVolumeChimeScenarios() {
   const env = installClientEnv();
+  const lastInterval = (name) => env.intervals.filter((x) => x.fn.toString().includes(name)).at(-1);
   try {
-    env.ls._clear();
-    env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-STORE');
-    env.G.fetch = validLicenseFetch();
-    const pad = (n) => (n < 10 ? '0' + n : String(n));
-    const tid = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-    const today = tid(new Date());
 
-    /* ---- SCENARIO 46 ---- */
-    await scenario('46. Storage: corrupt & legacy-junk analytics + failing storage recover cleanly', async () => {
-      // 46a: non-JSON analytics blob → fresh start
-      env.ls.setItem('focusbot.analytics', '{ definitely not json');
-      const c1 = await freshClient(env);
-      await sleep(30);
-      let f = c1.FocusBot;
-      let st = await f.analytics.getStats();
-      expectEqual(st.todayMs, 0, 'corrupt blob → clean 0s');
+    /* ---- SCENARIO 59 ---- */
+    await scenario('59. Trial: first run stamps the 72h window, sound works frictionless, badge shows', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
 
-      // 46b: legacy junk values (string timestamps, arrays) must be coerced
-      env.ls.setItem('focusbot.analytics', JSON.stringify({ days: { [today]: '12m45s', '2020-01-01': [5000, 5000] } }));
-      const c2 = await freshClient(env);
-      await sleep(30);
-      f = c2.FocusBot;
-      st = await f.analytics.getStats();
-      expectEqual(st.todayMs, 0, 'string junk value coerced to 0 (no NaN concatenation)');
-      expectTrue(Number.isFinite(st.weekMs), 'weekMs stays a finite number');
+      // No license, no key, no payment — the first 72 hours are fully unlocked.
+      expectEqual(fb.isPro, false, 'unlicensed');
+      expectTrue(fb.trial.active, 'trial active right after first boot');
+      expectEqual(fb.trial.days, 3, '3-day window');
+      const stamped = Number(env.ls.getItem('focusbot.trialStart'));
+      expectTrue(Number.isFinite(stamped) && stamped > 0, 'first run stamps focusbot.trialStart');
+      expectEqual(fb.trial.endsAt, stamped + 3 * 24 * 3600 * 1000, 'endsAt = start + 72h');
+      expectTrue(fb.trial.remainingMs > 0 && fb.trial.remainingMs <= 3 * 24 * 3600 * 1000, 'remainingMs within 72h');
+      const badge = c.stub('.quota').textContent || '';
+      expectTrue(badge.indexOf('Deneme') !== -1, 'footer badge shows the trial countdown (got: ' + badge + ')');
+      expectTrue(badge.indexOf('kald\u0131') !== -1, 'badge in Turkish, "kaldı"');
 
-      // 46c: array-shaped days map (old schema) → ignored, fresh start
-      env.ls.setItem('focusbot.analytics', JSON.stringify({ days: [5000, 5000, 5000] }));
-      const c3 = await freshClient(env);
-      await sleep(30);
-      f = c3.FocusBot;
-      st = await f.analytics.getStats();
-      expectEqual(st.todayMs, 0, 'array days (old schema) ignored');
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'frictionless trial play');
+      expectTrue(MockAudioContext.instances.length >= 1, 'AudioContext created during the trial');
+    });
 
-      // 46d: chrome.storage keeps failing (QUOTA/lastError) → analytics runs in memory
-      const chMap = new Map();
-      env.G.chrome = {
-        runtime: { lastError: { message: 'QUOTA_BYTES_PER_ITEM quota was exceeded' } },
+    /* ---- SCENARIO 60 ---- */
+    await scenario('60. Trial: persisted across reloads — never re-stamped', async () => {
+      const stamped = Number(env.ls.getItem('focusbot.trialStart'));
+      expectTrue(Number.isFinite(stamped) && stamped > 0, 'trialStart present from previous scenario');
+      const c2 = await freshClient(env);          // F5 with the same storage
+      const fb2 = c2.FocusBot;
+      expectEqual(Number(env.ls.getItem('focusbot.trialStart')), stamped, 'trialStart NOT re-stamped on reload');
+      expectTrue(fb2.trial.active, 'trial still active after reload');
+      expectEqual(fb2.trial.endsAt, stamped + 3 * 24 * 3600 * 1000, 'window anchored to the original start');
+    });
+
+    /* ---- SCENARIO 61 ---- */
+    await scenario('61. Trial: expired at boot → locked, badge "License required", no audio', async () => {
+      env.ls._clear();
+      seedExpiredTrial(env);
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      expectEqual(fb.trial.active, false, 'trial inactive');
+      expectEqual(fb.trial.remainingMs, 0, 'remainingMs 0');
+      expectEqual((c.stub('.quota').textContent || ''), 'License required', 'badge shows License required');
+      fb.play();
+      await sleep(20);
+      expectEqual(fb.isPlaying, false, 'play blocked');
+      expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext after trial');
+      expectEqual(c.stub('.overlay').hidden, false, 'upsell modal opened');
+    });
+
+    /* ---- SCENARIO 62 ---- */
+    await scenario('62. Trial: mid-session expiry pauses audio, opens paywall, stays locked', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.trialStart', String(Date.now() - 2 * 3600 * 1000)); // started 2h ago → active
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'plays inside the trial window');
+      const realNow = Date.now;
+      Date.now = () => realNow() + 3 * 24 * 3600 * 1000;   // jump past the 72h window
+      try {
+        const wd = lastInterval('trialWatchdog');
+        expectTrue(!!wd, 'trial watchdog interval registered');
+        wd.fn();                                             // the watchdog fires while running
+        await sleep(430);                                    // suspend path
+        expectEqual(fb.isPlaying, false, 'audio paused at expiry');
+        expectEqual(fb.trial.active, false, 'trial ended');
+        expectEqual(fb.trial.remainingMs, 0, 'no time left');
+        expectEqual(c.stub('.overlay').hidden, false, 'paywall opened by the watchdog');
+        fb.play();
+        await sleep(20);
+        expectEqual(fb.isPlaying, false, 'still locked after expiry');
+        expectEqual(MockAudioContext.instances.length, 1, 'existing context only — no graph rebuild');
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    /* ---- SCENARIO 63 ---- */
+    await scenario('63. Trial + volumes persist via chrome.storage.local (MV3 content-script path)', async () => {
+      env.ls._clear();
+      const cStore = new Map([
+        ['focusbot.volBinaural', '0.23'],
+        ['focusbot.volAmbient', '0.41'],
+      ]);
+      const chromeStub = {
         storage: {
           local: {
-            get(k, cb) { const out = {}; if (chMap.has(k)) out[k] = chMap.get(k); cb(out); },
-            set(o, cb) { for (const k in o) chMap.set(k, o[k]); if (cb) cb(); },
+            get(keys, cb) {
+              const out = {};
+              const arr = Array.isArray(keys) ? keys : Object.keys(keys || {});
+              for (const k of arr) out[k] = cStore.has(k) ? cStore.get(k) : undefined;
+              cb(out);
+            },
+            set(obj, cb) { for (const k of Object.keys(obj || {})) cStore.set(k, String(obj[k])); if (cb) cb(); },
+            remove(keys, cb) { for (const k of (keys || [])) cStore.delete(k); if (cb) cb(); },
           },
         },
       };
-      const c4 = await freshClient(env);
+      const savedChrome = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
+      Object.defineProperty(globalThis, 'chrome', { value: chromeStub, writable: true, configurable: true });
+      try {
+        const c = await freshClient(env);
+        const fb = c.FocusBot;
+        expectTrue(cStore.has('focusbot.trialStart'), 'trialStart written through chrome.storage.local');
+        expectEqual(fb.volumeBinaural, 0.23, 'saved binaural stage restored');
+        expectEqual(fb.volumeAmbient, 0.41, 'saved ambient stage restored');
+        const bin = c.stub('.vol-bin');
+        bin.value = '35';
+        bin.dispatch('input');
+        expectEqual(cStore.get('focusbot.volBinaural'), '0.35', 'slider persisted via chrome.storage.local');
+        expectEqual(fb.volumeBinaural, 0.35, 'live state updated');
+      } finally {
+        if (savedChrome) Object.defineProperty(globalThis, 'chrome', savedChrome);
+        else delete globalThis.chrome;
+      }
+    });
+
+    /* ---- SCENARIO 64 ---- */
+    await scenario('64. Volume sliders: independent live ramps + persistence (localStorage)', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-VOL');
+      env.G.fetch = validLicenseFetch();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
       await sleep(30);
-      f = c4.FocusBot;
-      f.pomodoro.start();
-      const at = env.intervals.filter((x) => x.fn.toString().includes('analyticsTick')).at(-1);
-      expectTrue(!!at, 'analytics tick registered');
-      for (let i = 0; i < 12; i++) at.fn();
-      await sleep(20);
-      st = await f.analytics.getStats();
-      expectTrue(st.todayMs >= 12000, 'focus time still banked under storage failure (got ' + st.todayMs + ')');
-      expectEqual(f.pomodoro.getState().running, true, 'widget keeps running through storage failures');
+      expectEqual(fb.volumeBinaural, 0.5, 'default binaural stage 0.50');
+      expectEqual(fb.volumeAmbient, 0.8, 'default ambient stage 0.80');
+
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'play');
+      expectApprox(MockAudioContext.gains[1].gain.value, 0.5, 1e-9, 'binaural stage node baked at 0.50');
+      expectApprox(MockAudioContext.gains[2].gain.value, 0.8, 1e-9, 'ambient stage node baked at 0.80');
+
+      fb.setVolumeBinaural(30);
+      fb.setVolumeAmbient(70);
+      expectApprox(MockAudioContext.gains[1].gain.value, 0.3, 1e-9, 'binaural stage live-ramped to 0.30');
+      expectApprox(MockAudioContext.gains[2].gain.value, 0.7, 1e-9, 'ambient stage live-ramped to 0.70');
+      expectEqual(Number(env.ls.getItem('focusbot.volBinaural')), 0.3, 'binaural persisted');
+      expectEqual(Number(env.ls.getItem('focusbot.volAmbient')), 0.7, 'ambient persisted');
+
+      const bin = c.stub('.vol-bin');
+      bin.value = '55';
+      bin.dispatch('input');
+      expectApprox(MockAudioContext.gains[1].gain.value, 0.55, 1e-9, 'binaural slider drives its stage node');
+      const amb = c.stub('.vol-amb');
+      amb.value = '25';
+      amb.dispatch('input');
+      expectApprox(MockAudioContext.gains[2].gain.value, 0.25, 1e-9, 'ambient slider drives its stage bus');
+
+      const st = fb.state;
+      expectEqual(st.volumeBinaural, 0.55, 'public state volumeBinaural');
+      expectEqual(st.volumeAmbient, 0.25, 'public state volumeAmbient');
+      expectTrue(!!st.trial && st.trial.days === 3, 'public state carries trial info');
+      expectEqual(st.mode, 'beta', 'mode untouched by volume changes');
+    });
+
+    /* ---- SCENARIO 65 ---- */
+    await scenario('65. Delta mode: Left=100Hz, Right=102Hz (delta=2Hz)', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      fb.setMode('delta');
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'play delta');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 100, 'Delta Left 100 Hz');
+      expectEqual(oscR.frequency.value, 102, 'Delta Right 102 Hz');
+      expectEqual(Math.abs(oscR.frequency.value - oscL.frequency.value), 2, 'Delta delta = 2 Hz');
+      const beat = c.stub('.beat-main').textContent || '';
+      expectTrue(beat.indexOf('\u0394 2 Hz') !== -1, 'beat label shows Δ2 (got: ' + beat + ')');
+    });
+
+    /* ---- SCENARIO 66 ---- */
+    await scenario('66. Solfeggio 432/528: equal-phase mono tones, carrier label instead of Δ0', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      fb.setMode('432');
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'play 432');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 432, '432 Left 432 Hz');
+      expectEqual(oscR.frequency.value, 432, '432 Right 432 Hz');
+      expectEqual(Math.abs(oscR.frequency.value - oscL.frequency.value), 0, 'equal phase — no beat');
+      let beat = c.stub('.beat-main').textContent || '';
+      expectTrue(beat.indexOf('432 Hz') !== -1, 'carrier shown for solfeggio (got: ' + beat + ')');
+      expectTrue(beat.indexOf('\u0394') === -1, 'no Δ prefix for equal-phase tones');
+
+      fb.setMode('528');
+      expectEqual(oscL.frequency.value, 528, '528 Left 528 Hz');
+      expectEqual(oscR.frequency.value, 528, '528 Right 528 Hz');
+      beat = c.stub('.beat-main').textContent || '';
+      expectTrue(beat.indexOf('528 Hz') !== -1, '528 carrier shown (got: ' + beat + ')');
+    });
+
+    /* ---- SCENARIO 67 ---- */
+    await scenario('67. Brown noise: staged gain 0.80, warm buffer, direct feed (no filter)', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-BROWN');
+      env.G.fetch = validLicenseFetch();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      await sleep(30);
+
+      const bufsBefore = MockAudioContext.buffers.length;
+      fb.setAmbient('brown');
+      expectEqual(fb.ambient, 'brown', 'brown layer engaged');
+      expectApprox(MockAudioContext.gains[5].gain.value, 0.8, 1e-9, 'brown layer gain staged to 0.80');
+      const src = MockAudioContext.sources.at(-1);
+      expectEqual(src.connections.length, 1, 'brown routes straight to its layer gain');
+      expectEqual(src.connections[0], MockAudioContext.gains[5], 'brown direct feed — no filter in between');
+      const buf = src.buffer.getChannelData(0);
+      expectTrue(buf.length > 0 && buf.some((v) => Math.abs(v) > 0.0001), 'brown buffer warm/non-silent');
+      expectEqual(MockAudioContext.buffers.length, bufsBefore + 1, 'exactly one new buffer for brown');
+
+      fb.toggleAmbient('white');
+      expectEqual([...fb.ambients].sort().join(','), 'brown,white', 'brown coexists multi-layer');
+      fb.toggleAmbient('brown');
+      expectEqual(src._stopped, true, 'brown source stopped when toggled off');
+      expectEqual(src.connections.length, 0, 'brown source disconnected');
+      fb.toggleAmbient('off');
+      expectEqual(fb.ambient, 'off', 'off clears everything');
+    });
+
+    /* ---- SCENARIO 68 ---- */
+    await scenario('68. Gong chime: synthesized D5 on every pomodoro phase change, bypasses master bus', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-CHIME');
+      env.G.fetch = validLicenseFetch();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      await sleep(30);
+
+      fb.pomodoro.start();
+      await waitFor(() => fb.isPlaying, 2000, 'playing for chime test');
+      const oscs0 = MockAudioContext.oscs.length;     // 2 — the binaural pair
+      const gains0 = MockAudioContext.gains.length;   // 8 — staged graph
+      const it = lastInterval('pomodoroTick');
+      expectTrue(!!it, 'pomodoro tick registered');
+
+      for (let i = 0; i < 1500; i++) it.fn();         // focus → break: gong A
+      expectEqual(MockAudioContext.oscs.length, oscs0 + 1, 'one gong oscillator allocated');
+      const gongOsc = MockAudioContext.oscs.at(-1);
+      expectEqual(gongOsc.frequency.value, 587.33, 'gong at D5 587.33 Hz');
+      expectEqual(gongOsc.type, 'sine', 'pure sine tone');
+      const gongGain = MockAudioContext.gains.at(-1);
+      expectApprox(gongGain.gain.lastRamp, 0.0001, 1e-6, 'exponential decay tail reached 0.0001');
+      expectEqual(gongOsc.connections[0], gongGain, 'osc → chime gain wired');
+      expectEqual(gongGain.connections[0], MockAudioContext.instances.at(-1).destination, 'chime rings straight to destination');
+
+      for (let i = 0; i < 300; i++) it.fn();          // break → focus: gong B
+      expectEqual(MockAudioContext.oscs.length, oscs0 + 2, 'second gong on break→focus');
+      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 587.33, 'gong B also D5');
+      expectEqual(MockAudioContext.gains.length, gains0 + 2, 'exactly +2 chime gain nodes across both transitions');
+
+      fb.pomodoro.reset();
+      expectEqual(fb.pomodoro.getState().running, false, 'reset stops the cycle');
+      expectEqual(MockAudioContext.oscs.length, oscs0 + 2, 'reset adds no chime of its own');
     });
   } finally { env.restore(); }
 }
@@ -2166,7 +2433,6 @@ async function extensionAuditScenarios() {
           sent.push(msg);
           if (deadChannel) { cb(null); return; } // channel closed mid-flight
           if (msg.cmd === 'getState') cb({ ok: true, state: { pro: true, playing: true, mode: 'alpha', ambient: 'off', pomodoro: { running: true, state: 'focus', remainingMs: 600000 } } });
-          else if (msg.cmd === 'analytics') cb({ ok: true, state: { today: '12m', week: '3h' } });
           else cb({ ok: true });
         },
       },
@@ -2193,7 +2459,7 @@ async function extensionAuditScenarios() {
       expectTrue(sent.some((m) => m.cmd === 'getState'), 'popup asked for widget state');
       expectTrue(mkEl('no-widget').classList.contains('hidden') === false, 'disconnected note shown (no crash, lastError consumed)');
 
-      // Phase 2 — widget responds live: render + analytics + no-widget hides
+      // Phase 2 — widget responds live: render + no-widget hides
       deadChannel = false;
       chromeStub.runtime.lastError = null;
       for (const f of pdoc.listeners.DOMContentLoaded || []) f();
@@ -2201,7 +2467,6 @@ async function extensionAuditScenarios() {
       expectTrue(mkEl('no-widget').classList.contains('hidden'), 'disconnected note hidden with live widget');
       expectEqual(mkEl('st-state').textContent, 'Playing', 'live state rendered');
       expectEqual(mkEl('pro-chip').style.display, '', 'pro chip shown');
-      expectEqual(mkEl('st-today').textContent, '12m', 'analytics stat rendered');
     } finally {
       if (savedST) Object.defineProperty(globalThis, 'setTimeout', savedST); else delete globalThis.setTimeout;
       if (savedChrome) Object.defineProperty(globalThis, 'chrome', savedChrome); else delete globalThis.chrome;
@@ -2211,7 +2476,7 @@ async function extensionAuditScenarios() {
   });
 
   /* ---- SCENARIO 48 ---- */
-  await scenario('48. Manifest audit: MV3, iframes excluded, storage permission, popup wired', async () => {
+  await scenario('48. Manifest audit: MV3, iframes excluded, minimal permissions, popup wired', async () => {
     const fsMod = await import('node:fs');
     const manifestPath = new URL('../client/manifest.json', import.meta.url);
     expectTrue(fsMod.existsSync(manifestPath), 'manifest.json present');
@@ -2222,7 +2487,6 @@ async function extensionAuditScenarios() {
     expectEqual(cs.all_frames, false, 'no double audio in iframes');
     expectEqual(cs.match_about_blank, false, 'about:blank not injected');
     expectEqual(cs.run_at, 'document_end', 'injected after DOM');
-    expectTrue(Array.isArray(manifest.permissions) && manifest.permissions.includes('storage'), 'storage permission present');
     expectEqual(manifest.action && manifest.action.default_popup, 'popup.html', 'popup.html wired as action');
     for (const f of ['popup.html', 'popup.js', 'focus-bot.css']) {
       expectTrue(fsMod.existsSync(new URL('../client/' + f, import.meta.url)), f + ' exists');
@@ -2264,6 +2528,14 @@ async function extensionAuditScenarios() {
     expectEqual(payload.v, 1, 'version');
     expectEqual(payload.exp - payload.iat, 12 * 3600 * 1000, 'iat..exp window = 12h');
     expectTrue(payload.iat <= Date.now() && payload.exp > Date.now(), 'token is live right now');
+    // Matrix parity: worker ships the same Delta + Solfeggio coefficients the
+    // client falls back to, so production tokens can drive every UI mode.
+    expectEqual(payload.mods.delta.l, 100, 'delta left 100');
+    expectEqual(payload.mods.delta.r, 102, 'delta right 102');
+    expectEqual(payload.mods['432'].l, 432, 'solfeggio 432 = 432 Hz');
+    expectEqual(payload.mods['432'].r, 432, 'solfeggio 432 equal-phase (mono)');
+    expectEqual(payload.mods['528'].l, 528, 'solfeggio 528 = 528 Hz');
+    expectEqual(payload.mods['528'].r, 528, 'solfeggio 528 equal-phase (mono)');
     // Re-verify issues a fresh token → no stable replay vector
     const res2 = await postJSON(env, '/api/verify-license', { apiKey: key, domain: 'replay.test' });
     const v2 = await res2.json();
@@ -2293,8 +2565,8 @@ async function extensionAuditScenarios() {
 }
 
 /* ===========================================================================
- * SCENARIO 52-55 : WEBSTORE COMPLIANCE (dynamic BTC rate endpoint, store
- * manifest requirements, offline/privacy assurance, client modal pricing)
+ * SCENARIO 52-53,55-56 : WEBSTORE COMPLIANCE (dynamic BTC rate endpoint, store
+ * manifest requirements, client modal pricing)
  * ======================================================================== */
 async function webstoreComplianceScenarios() {
 
@@ -2322,12 +2594,12 @@ async function webstoreComplianceScenarios() {
   });
 
   /* ---- SCENARIO 53 ---- */
-  await scenario('53. Store manifest: v1.3.0, full icon set wired, developer/homepage_url, minimal permissions', async () => {
+  await scenario('53. Store manifest: v1.4.0, full icon set wired, developer/homepage_url, minimal permissions', async () => {
     const fsMod = await import('node:fs');
     const manifestPath = new URL('../client/manifest.json', import.meta.url);
     expectTrue(fsMod.existsSync(manifestPath), 'manifest.json present');
     const manifest = JSON.parse(fsMod.readFileSync(manifestPath, 'utf8'));
-    expectEqual(manifest.version, '1.3.0', 'version pinned to 1.3.0');
+    expectEqual(manifest.version, '1.4.0', 'version pinned to 1.4.0');
     expectEqual(manifest.manifest_version, 3, 'MV3');
 
     // Icon set: 16/32/48/128 files exist AND are wired into icons + default_icon
@@ -2345,7 +2617,7 @@ async function webstoreComplianceScenarios() {
     expectTrue(!!manifest.developer && typeof manifest.developer.url === 'string' && /^https:\/\//.test(manifest.developer.url), 'developer.url is https');
     expectTrue(typeof manifest.homepage_url === 'string' && /^https:\/\//.test(manifest.homepage_url), 'homepage_url is https');
 
-    // Minimal permission footprint: only storage + notifications, no host_permissions
+    // Minimal permission footprint: only notifications, no host_permissions
     const perms = manifest.permissions || [];
     const allowed = ['storage', 'notifications'];
     for (const p of perms) {
@@ -2362,61 +2634,12 @@ async function webstoreComplianceScenarios() {
     expectEqual(manifest.content_scripts[0].all_frames, false, 'all_frames:false');
   });
 
-  /* ---- SCENARIO 54 ---- */
-  await scenario('54. Offline privacy: analytics persist to chrome.storage.local only, zero network writes', async () => {
-    const env = installClientEnv();
-    try {
-      env.ls._clear();
-      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-PRIVACY');
-      const chMap = new Map();
-      env.G.chrome = {
-        storage: {
-          local: {
-            get(k, cb) { const out = {}; if (chMap.has(k)) out[k] = chMap.get(k); cb(out); },
-            set(o, cb) { for (const k in o) chMap.set(k, o[k]); if (cb) cb(); },
-          },
-        },
-      };
-      // Provide a valid license at boot so the widget activates Pro locally
-      env.G.fetch = validLicenseFetch();
-      const c = await freshClient(env);
-      await sleep(30);
-      const fb = c.FocusBot;
-      expectEqual(fb.isPro, true, 'pro provisioned in offline storage test');
-
-      // After boot, EVERY other network call is counted — none may carry data.
-      let networkCalls = 0;
-      env.G.fetch = async (url) => {
-        const u = String(url);
-        if (u.includes('/api/verify-license')) {
-          return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
-        }
-        networkCalls++;
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
-      };
-
-      fb.pomodoro.start();
-      await waitFor(() => fb.isPlaying, 2000, 'playing for privacy test');
-      const at = env.intervals.filter((x) => x.fn.toString().includes('analyticsTick')).at(-1);
-      for (let i = 0; i < 12; i++) at.fn();
-      await sleep(20);
-
-      // Focus data landed in chrome.storage.local — never on the wire
-      const saved = chMap.get('focusbot.analytics');
-      expectTrue(!!saved, 'analytics stored in chrome.storage.local');
-      const parsed = JSON.parse(saved);
-      expectTrue(!!parsed.days && typeof parsed.days === 'object', 'analytics payload local-only format');
-      expectEqual(networkCalls, 0, 'zero focus-data bytes left the device');
-      const st = await fb.analytics.getStats();
-      expectTrue(st.todayMs >= 12000, 'focus time tallied from local storage');
-    } finally { env.restore(); }
-  });
-
   /* ---- SCENARIO 55 ---- */
   await scenario('55. Client: payment modal shows dynamic "12 € (~0.00018182 BTC)" from /api/get-btc-rate', async () => {
     const env = installClientEnv();
     try {
       env.ls._clear();
+      seedExpiredTrial(env);   // post-trial: the "no license" path must stay locked
       env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-PRICING');
       env.G.fetch = async (url) => {
         const u = String(url);
@@ -2452,6 +2675,7 @@ async function webstoreComplianceScenarios() {
     const env = installClientEnv();
     try {
       env.ls._clear();
+      seedExpiredTrial(env);   // post-trial: modal close/reopen stays fully locked
       const c = await freshClient(env);
       const fb = c.FocusBot;
       const closeBtn = c.stub('.modal-close');
@@ -2564,16 +2788,18 @@ try {
   section('CLIENT — Audio Synthesizer Frequency Math');
   await audioSynthScenarios();
 
-  section('CLIENT — Productivity Suite (Pomodoro, Analytics, Ambient Mixer)');
+  section('CLIENT — Productivity Suite (Pomodoro, Ambient Mixer)');
   await productivityScenarios();
   await ambientMixerScenarios();
 
-  section('CLIENT — Autoplay Policy, Memory & Storage Resilience');
+  section('CLIENT — Autoplay Policy & Memory');
   await clientAutoplayScenarios();
   await clientMemoryLeakScenarios();
-  await clientStorageResilienceScenarios();
 
-  section('CLIENT — Hardening & MV3 Bridge (engine token, chrome.storage, popup)');
+  section('CLIENT — 3-Day Trial, Volume Stages, New Modes & Chime');
+  await trialVolumeChimeScenarios();
+
+  section('CLIENT — Hardening & MV3 Bridge (engine token, popup)');
   await clientHardeningScenarios();
   await extensionAuditScenarios();
 

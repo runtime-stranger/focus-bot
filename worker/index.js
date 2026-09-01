@@ -289,10 +289,13 @@ function engineCoefficients(seed) {
     seed: seed,
     gain: 1.0,                      // master mixer coefficient (multiplies 0.05 ceiling)
     mods: {
-      beta:  { l: 200, r: 214, ph: 0, k: 1 },
-      alpha: { l: 200, r: 210, ph: 1, k: 1 },
+      delta: { l: 100, r: 102, ph: 0, k: 1 },
       theta: { l: 180, r: 186, ph: 2, k: 1 },
+      alpha: { l: 200, r: 210, ph: 1, k: 1 },
+      beta:  { l: 200, r: 214, ph: 0, k: 1 },
       gamma: { l: 200, r: 240, ph: 3, k: 1 },
+      '432': { l: 432, r: 432, ph: 0, k: 1 },   // Solfeggio — equal-phase mono
+      '528': { l: 528, r: 528, ph: 0, k: 1 },
     },
   };
 }

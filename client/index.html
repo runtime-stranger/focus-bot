@@ -101,9 +101,9 @@
     }
 
     .waves {
-      display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
     }
-    @media (max-width: 600px) { .waves { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 700px) { .waves { grid-template-columns: repeat(2, 1fr); } }
     .wave-card {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 16px; padding: 28px 18px; text-align: center;
@@ -230,14 +230,32 @@
     <div class="wave-card" data-mode="theta">
       <div class="wave-icon">✨</div>
       <div class="wave-name">Theta</div>
-      <div class="wave-freq">200 / 207 Hz &middot; Δ7</div>
+      <div class="wave-freq">180 / 186 Hz &middot; Δ6</div>
       <div class="wave-tag">Creativity</div>
+    </div>
+    <div class="wave-card" data-mode="delta">
+      <div class="wave-icon">🌙</div>
+      <div class="wave-name">Delta</div>
+      <div class="wave-freq">100 / 102 Hz &middot; Δ2</div>
+      <div class="wave-tag">Deep Rest</div>
     </div>
     <div class="wave-card" data-mode="gamma">
       <div class="wave-icon">🔬</div>
       <div class="wave-name">Gamma</div>
       <div class="wave-freq">200 / 240 Hz &middot; Δ40</div>
       <div class="wave-tag">Problem Solving</div>
+    </div>
+    <div class="wave-card" data-mode="432">
+      <div class="wave-icon">🎵</div>
+      <div class="wave-name">432 Hz</div>
+      <div class="wave-freq">432 / 432 Hz &middot; Solfeggio</div>
+      <div class="wave-tag">Clarity</div>
+    </div>
+    <div class="wave-card" data-mode="528">
+      <div class="wave-icon">🌿</div>
+      <div class="wave-name">528 Hz</div>
+      <div class="wave-freq">528 / 528 Hz &middot; Solfeggio</div>
+      <div class="wave-tag">Deep Reset</div>
     </div>
   </div>
 </section>
