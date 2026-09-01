@@ -1091,12 +1091,14 @@
   '.buy:hover{background:rgba(56,189,248,.26)}' +
 
   /* ---- Overlay / Modal ---- */
-  '.overlay{position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;' +
+  '.overlay{position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;' +
+    'padding:20px;box-sizing:border-box;overflow-y:auto;-webkit-overflow-scrolling:touch;' +
     '-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}' +
-  '.modal{position:relative;width:min(96vw,340px);max-width:340px;background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
-    'padding:22px 20px;text-align:center;color:#ebebf5;box-shadow:0 24px 80px rgba(0,0,0,.55);' +
+  '.modal{position:relative;width:min(96vw,340px);max-width:340px;max-height:90vh;overflow-y:auto;margin:auto;' +
+    'background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
+    'padding:32px 24px 24px;text-align:center;color:#ebebf5;box-shadow:0 24px 80px rgba(0,0,0,.55);' +
     'animation:fb-pop .34s cubic-bezier(.32,1.35,.5,1)}' +
-  '.modal-close{position:absolute;top:14px;right:14px;width:32px;height:32px;border-radius:50%;' +
+  '.modal-close{position:absolute !important;top:12px !important;right:12px !important;width:32px;height:32px;border-radius:50%;' +
     'border:1px solid rgba(255,255,255,.2);cursor:pointer;z-index:999999;opacity:1;' +
     'display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;line-height:1;' +
     'color:#fff;background:rgba(255,255,255,.12);' +
