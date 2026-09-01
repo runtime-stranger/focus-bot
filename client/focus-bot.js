@@ -1114,11 +1114,12 @@
     'border-radius:9px;padding:8px 9px;margin-bottom:9px;font-family:ui-monospace,Menlo,Consolas,monospace}' +
   '.btc-copy{width:100%;border:0;border-radius:10px;padding:9px;cursor:pointer;font-size:12px;font-weight:600;color:#06283d;' +
     'background:linear-gradient(135deg,#f7931a,#fbbf24)}' +
-  '.lic{display:flex;gap:6px;margin-bottom:10px}' +
-  '.lic input{flex:1;min-width:0;background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.14);color:#ebebf5;' +
-    'border-radius:12px;padding:8px 11px;font-size:12px;outline:none}' +
+  '.lic{display:flex;flex-direction:column;gap:10px;margin-bottom:10px}' +
+  '.lic input{width:100%;box-sizing:border-box;background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.14);color:#ebebf5;' +
+    'border-radius:12px;padding:10px 12px;font-size:12px;font-family:monospace,monospace;outline:none;' +
+    'overflow:hidden;white-space:nowrap;text-overflow:ellipsis}' +
   '.lic input:focus{border-color:#38bdf8}' +
-  '.lic button{flex:none;border:0;border-radius:12px;padding:0 14px;cursor:pointer;font-size:12px;font-weight:600;' +
+  '.lic button{width:100%;box-sizing:border-box;border:0;border-radius:12px;padding:12px;cursor:pointer;font-size:12px;font-weight:600;' +
     'background:rgba(120,120,128,.28);color:#ebebf5}' +
   '.lic button:hover:not(:disabled){background:rgba(120,120,128,.44)}' +
   '.m-later{background:none;border:0;color:#98989f;font-size:11px;cursor:pointer}' +
@@ -1243,7 +1244,7 @@
       '</div>' +
     '</div>' +
     '<div class="lic">' +
-      '<input id="fb-license-input" class="lic-input" type="text" maxlength="64" spellcheck="false" autocomplete="off" placeholder="TXID or License Key" aria-label="TXID or license key">' +
+      '<input id="fb-license-input" class="lic-input" type="text" maxlength="128" spellcheck="false" autocomplete="off" placeholder="TXID or License Key" aria-label="TXID or license key">' +
       '<button type="button" id="fb-activate-btn" class="activate">Verify &amp; Activate</button>' +
     '</div>' +
   '</div>' +

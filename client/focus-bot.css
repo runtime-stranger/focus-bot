@@ -494,28 +494,34 @@
 }
 #focus-bot-root .lic {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  gap: 10px;
   margin-bottom: 10px;
 }
 #focus-bot-root .lic input {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   background: rgba(0, 0, 0, .24);
   border: 1px solid rgba(255, 255, 255, .14);
   color: #ebebf5;
   border-radius: 12px;
-  padding: 8px 11px;
+  padding: 10px 12px;
   font-size: 12px;
+  font-family: monospace, monospace;
   outline: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 #focus-bot-root .lic input:focus {
   border-color: #38bdf8;
 }
 #focus-bot-root .lic button {
-  flex: none;
+  width: 100%;
+  box-sizing: border-box;
   border: 0;
   border-radius: 12px;
-  padding: 0 14px;
+  padding: 12px;
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
