@@ -1096,10 +1096,12 @@
   '.modal{position:relative;width:min(96vw,340px);max-width:340px;background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
     'padding:22px 20px;text-align:center;color:#ebebf5;box-shadow:0 24px 80px rgba(0,0,0,.55);' +
     'animation:fb-pop .34s cubic-bezier(.32,1.35,.5,1)}' +
-  '.modal-close{position:absolute;top:12px;right:12px;width:28px;height:28px;border-radius:50%;border:0;cursor:pointer;' +
-    'display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;color:#98989f;' +
-    'background:rgba(120,120,128,.24);transition:background .18s,color .18s,transform .18s ease}' +
-  '.modal-close:hover{color:#fff;background:rgba(120,120,128,.44);transform:scale(1.08)}' +
+  '.modal-close{position:absolute;top:14px;right:14px;width:32px;height:32px;border-radius:50%;' +
+    'border:1px solid rgba(255,255,255,.2);cursor:pointer;z-index:999999;opacity:1;' +
+    'display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;line-height:1;' +
+    'color:#fff;background:rgba(255,255,255,.12);' +
+    'transition:background .18s,color .18s,transform .18s ease}' +
+  '.modal-close:hover{background:rgba(255,255,255,.25);color:#fff;transform:scale(1.05)}' +
   '.modal-close:active{transform:scale(.94)}' +
   '.modal h3{font-size:15.5px;font-weight:600;margin-bottom:8px}' +
   '.modal p{font-size:12.5px;color:#98989f;line-height:1.6;margin-bottom:14px}' +

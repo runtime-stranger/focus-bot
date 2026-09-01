@@ -403,26 +403,29 @@
 }
 #focus-bot-root .modal-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 28px;
-  height: 28px;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  border: 0;
+  border: 1px solid rgba(255, 255, 255, .2);
   cursor: pointer;
+  z-index: 999999;
+  opacity: 1 !important;
+  color: #ffffff !important;
+  font-size: 20px;
+  font-weight: bold;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-  color: #98989f;
-  background: rgba(120, 120, 128, .24);
+  background: rgba(255, 255, 255, .12) !important;
   transition: background .18s, color .18s, transform .18s ease;
 }
 #focus-bot-root .modal-close:hover {
+  background: rgba(255, 255, 255, .25) !important;
   color: #fff;
-  background: rgba(120, 120, 128, .44);
-  transform: scale(1.08);
+  transform: scale(1.05);
 }
 #focus-bot-root .modal-close:active {
   transform: scale(.94);
