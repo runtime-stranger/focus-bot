@@ -1,8 +1,10 @@
 /*!
  * FocusBot release packager — zero-dependency STORED ZIP writer.
  *
- * Rebuilds `focus-bot-extension.zip` from the latest `client/` sources so the
- * GitHub Release artifact always matches the repository.
+ * Rebuilds the Chrome Web Store upload bundle `focus-bot-webstore-v1.3.0.zip`
+ * from the latest `client/` sources so the store artifact always matches the
+ * repository. Only production store files are included — no tests, no .git,
+ * no README, no node_modules.
  *
  * Usage:
  *   node scripts/package.js         (or: npm run package)
@@ -12,15 +14,22 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = join(ROOT, 'focus-bot-extension.zip');
+const VERSION = '1.3.0';
+const CLIENT = join(ROOT, 'client');
+const OUT = join(ROOT, `focus-bot-webstore-v${VERSION}.zip`);
 
-// Entry order matters to keep the archive deterministic.
+// Production store files only — entry order matters for a deterministic archive.
 const ENTRIES = [
   'manifest.json',
   'focus-bot.js',
   'focus-bot.css',
   'popup.html',
   'popup.js',
+  'icons/16x16.png',
+  'icons/32x32.png',
+  'icons/48x48.png',
+  'icons/128x128.png',
+  'privacy.html',
 ];
 
 /* ---- CRC32 (RFC 1952 table) ---- */
@@ -106,7 +115,7 @@ function zip(entries) {
 }
 
 /* ---- Build ---- */
-const missing = ENTRIES.filter((f) => !existsSync(join(ROOT, 'client', f)));
+const missing = ENTRIES.filter((f) => !existsSync(join(CLIENT, f)));
 if (missing.length) {
   console.error('[package] missing client files:', missing.join(', '));
   process.exit(1);
@@ -114,7 +123,7 @@ if (missing.length) {
 
 const entries = ENTRIES.map((f) => ({
   name: f,
-  data: readFileSync(join(ROOT, 'client', f)),
+  data: readFileSync(join(CLIENT, f)),
 }));
 
 const archive = zip(entries);
@@ -123,3 +132,4 @@ writeFileSync(OUT, archive);
 const total = entries.reduce((s, e) => s + e.data.length, 0);
 console.log(`[package] wrote ${OUT}`);
 console.log(`[package] ${entries.length} files · ${total} bytes raw · ${archive.length} bytes archive`);
+console.log(`[package] contents: ${ENTRIES.join(', ')}`);

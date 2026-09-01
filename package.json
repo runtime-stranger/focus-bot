@@ -6,7 +6,8 @@
   "description": "FocusBot - Autonomous Deep Work Suite & Neural Frequency Synthesizer (MV3 extension + Cloudflare Worker license API)",
   "scripts": {
     "test": "node run-tests.js",
-    "package": "node scripts/package.js"
+    "package": "node scripts/package.js",
+    "gen-icons": "node scripts/gen-icons.js"
   },
   "engines": {
     "node": ">=18"

@@ -40,6 +40,16 @@
  *   [SCENARIO 37-38] Hardening: signed engine token drives frequency matrix + gain;
  *                   corrupt token → safe fallback matrix
  *   [SCENARIO 39] Messaging bridge: chrome.runtime FOCUSBOT_CTRL (MV3 popup) → widget
+ *   [SCENARIO 40-41] Worker abuse: malformed JSON bodies, oversized input & flood → 4xx never 5xx
+ *   [SCENARIO 42] License expiry edge: valid inside window, revoked exactly at boundary
+ *   [SCENARIO 43] verify-tx junk vouts (NaN/negative/null) never satisfy amount check
+ *   [SCENARIO 44] Autoplay policy: blocked resume → honest state, gesture recovers
+ *   [SCENARIO 45] Memory: pomodoro phase cycles + ambient toggles leak zero AudioNodes
+ *   [SCENARIO 46] Storage resilience: corrupt/legacy analytics + failing chrome.storage
+ *   [SCENARIO 47] Popup bridge: dead channel consumed (lastError), live widget recovers
+ *   [SCENARIO 48] Manifest audit: MV3, all_frames:false, storage perm, popup wired
+ *   [SCENARIO 49,51] Engine token lifecycle: stale token ignored (fallback), fresh applied
+ *   [SCENARIO 50] Token replay-safety: iat + fixed 12h exp window, fresh re-issue per verify
  *
  *  Test infrastructure:
  *   - Mock Cloudflare KV (Map-based, put() call log + TTL record)
@@ -363,12 +373,15 @@ class MockAudioContext {
   static gains = [];
   static sources = [];
   static buffers = [];
+  /** When false, resume() rejects like a browser enforcing the autoplay policy. */
+  static resumable = true;
   static resetStatics() {
     MockAudioContext.instances = [];
     MockAudioContext.oscs = [];
     MockAudioContext.gains = [];
     MockAudioContext.sources = [];
     MockAudioContext.buffers = [];
+    MockAudioContext.resumable = true;
   }
 
   constructor() {
@@ -378,7 +391,13 @@ class MockAudioContext {
     this.currentTime = 0;
     this.sampleRate = 48000;
   }
-  resume() { this.state = 'running'; return Promise.resolve(); }
+  resume() {
+    if (!MockAudioContext.resumable) {
+      return Promise.reject(new DOMException('The AudioContext was not allowed to start. It must be resumed (or created) after a user gesture on the page.', 'NotAllowedError'));
+    }
+    this.state = 'running';
+    return Promise.resolve();
+  }
   suspend() { this.state = 'suspended'; return Promise.resolve(); }
   close() { this.state = 'closed'; return Promise.resolve(); }
   createOscillator() { const o = new MockOscillator(this); MockAudioContext.oscs.push(o); return o; }
@@ -1796,6 +1815,593 @@ async function clientHardeningScenarios() {
     } finally { env.restore(); }
   });
 }
+
+/* ===========================================================================
+ * SCENARIO 40-43 : WORKER ABUSE / STRESS AUDIT (malformed input, expiry edge,
+ * defensive vout handling). Called from the WORKER section, but defined here
+ * so the whole audit lives in one place.
+ * ======================================================================== */
+async function workerAbuseScenarios() {
+
+  /* ---- SCENARIO 40 ---- */
+  await scenario('40. Worker: primitive & malformed JSON bodies → clean 4xx, never 5xx', async () => {
+    const kv = new KVMock();
+    const env = makeEnv(kv);
+    const bodies = ['null', '12345', 'true', '[]', '[1,2]', '{bad json', '{"apiKey": 123}', '', '{   }   '];
+    for (const body of bodies) {
+      const res = await postJSON(env, '/api/verify-license', body);
+      expectTrue(res.status >= 400 && res.status < 500, 'bad body → 4xx (got HTTP ' + res.status + ' for ' + JSON.stringify(body.slice(0, 12)) + ')');
+    }
+    // Misshapen FIELD types (objects where strings are expected) must not 500 either
+    let res = await postJSON(env, '/api/verify-license', { apiKey: { nested: 1 }, domain: { evil: true } });
+    expectTrue(res.status >= 400 && res.status < 500, 'nested junk field types → 4xx/200 (got ' + res.status + ')');
+    res = await postJSON(env, '/api/verify-license', { apiKey: 'x', domain: 'x.com', rtc_sdp: { type: 42 } });
+    expectTrue(res.status >= 400 && res.status < 500, 'extraneous junk fields tolerated (got ' + res.status + ')');
+  });
+
+  /* ---- SCENARIO 41 ---- */
+  await scenario('41. Worker: oversized body + abusive flood → service stays healthy', async () => {
+    const kv = new KVMock();
+    const env = makeEnv(kv);
+    let res = await postJSON(env, '/api/verify-license', '{"apiKey":"' + 'A'.repeat(70000) + '"}');
+    expectTrue(res.status >= 400 && res.status < 500, 'oversized body → 4xx (got ' + res.status + ')');
+    for (let i = 0; i < 40; i++) {
+      res = await postJSON(env, '/api/verify-license', { apiKey: 'NOPE-' + i, domain: 'x.test' });
+      expectTrue(res.status === 403, 'unknown-key flood → 403 (#' + i + ')');
+    }
+    res = await getURL(env, '/api/health');
+    const h = await res.json();
+    expectEqual(h.ok, true, 'healthy after abuse');
+  });
+
+  /* ---- SCENARIO 42 ---- */
+  await scenario('42. Worker: expiry edge — valid inside the window, revoked at the boundary', async () => {
+    const kv = new KVMock();
+    const env = makeEnv(kv);
+    const auth = { authorization: 'Bearer ' + ADMIN_TOKEN };
+    const g = await postJSON(env, '/api/admin/grant', { domains: ['edge.test'], days: 1 }, auth);
+    expectEqual(g.status, 201, 'grant created');
+    const key = (await g.json()).licenseKey;
+    const lic = JSON.parse(await kv.get('license:' + key));
+    lic.expiresAt = Date.now() + 1500;
+    await kv.put('license:' + key, JSON.stringify(lic));
+
+    let res = await postJSON(env, '/api/verify-license', { apiKey: key, domain: 'edge.test' });
+    expectEqual(res.status, 200, 'valid inside the window');
+    await sleep(1600); // cross the exact expiry second
+    res = await postJSON(env, '/api/verify-license', { apiKey: key, domain: 'edge.test' });
+    expectEqual(res.status, 403, 'expired at boundary');
+    expectEqual((await res.json()).reason, 'expired', 'reason=expired');
+  });
+
+  /* ---- SCENARIO 43 ---- */
+  await scenario('43. Worker: NaN/negative/junk vout values never satisfy the amount check', async () => {
+    const kv = new KVMock();
+    const env = makeEnv(kv);
+    const BTC = env.BTC_ADDRESS;
+    const MOCK_REQUIRED_SATS = 24000;
+    await kv.put('pricing:cache', JSON.stringify({
+      btcEurPrice: 50000, requiredSats: MOCK_REQUIRED_SATS,
+      minAcceptableSats: Math.ceil(MOCK_REQUIRED_SATS * 0.97), fetchedAt: Date.now(),
+    }));
+    const JUNK_TXID = '11'.repeat(32);
+    const NEG_TXID = '22'.repeat(32);
+    const STR_TXID = '33'.repeat(32);
+    installMempoolHook();
+    try {
+      setMempoolTx(JUNK_TXID, { txid: JUNK_TXID, vout: [
+        { scriptpubkey_address: BTC, value: 'not-a-number' },
+        { scriptpubkey_address: BTC, value: null },
+        { scriptpubkey_address: BTC, value: {} },
+      ]});
+      setMempoolTx(NEG_TXID, { txid: NEG_TXID, vout: [
+        { scriptpubkey_address: BTC, value: -5000 },
+        { scriptpubkey_address: BTC, value: Number.NaN },
+      ]});
+      setMempoolTx(STR_TXID, { txid: STR_TXID, vout: [
+        { scriptpubkey_address: BTC, value: '24000' },   // numeric string is legitimately honored
+      ]});
+
+      let res = await postJSON(env, '/api/verify-tx', { txid: JUNK_TXID, domain: 'site.com' });
+      expectEqual(res.status, 402, 'junk vout values → 402');
+      expectEqual((await res.json()).paid, 0, 'paid=0 for junk vouts');
+
+      res = await postJSON(env, '/api/verify-tx', { txid: NEG_TXID, domain: 'site.com' });
+      expectEqual(res.status, 402, 'negative/NaN vouts → 402');
+      expectEqual((await res.json()).paid, 0, 'paid=0 for negative vouts');
+
+      res = await postJSON(env, '/api/verify-tx', { txid: STR_TXID, domain: 'site.com' });
+      const body = await res.json();
+      expectEqual(res.status, 200, 'numeric-string vout still honored');
+      expectTrue(!!body.licenseKey, 'license granted');
+    } finally {
+      uninstallMempoolHook();
+    }
+  });
+}
+
+/* ===========================================================================
+ * SCENARIO 44 : CLIENT AUTOPLAY POLICY
+ * A suspended AudioContext (browser autoplay policy) must never report
+ * "playing", must not bank analytics time, and must recover on first gesture.
+ * ======================================================================== */
+async function clientAutoplayScenarios() {
+  const env = installClientEnv();
+  try {
+    env.ls._clear();
+    env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-AUTOPLAY');
+    env.G.fetch = validLicenseFetch();
+    const c = await freshClient(env);
+    const fb = c.FocusBot;
+    await sleep(30);
+    expectEqual(fb.isPro, true, 'pro provisioned');
+
+    /* ---- SCENARIO 44 ---- */
+    await scenario('44. Autoplay: blocked resume → honest state; first gesture recovers', async () => {
+      MockAudioContext.resumable = false;
+      fb.pomodoro.start();
+      await waitFor(() => fb.autoplayBlocked, 2000, 'autoplayBlocked flagged');
+      expectEqual(fb.isPlaying, false, 'does not fake playback');
+      const st = await fb.analytics.getStats();
+      expectEqual(st.todayMs, 0, 'silent playback not banked as focus time');
+      expectEqual(MockAudioContext.instances.at(-1).state, 'suspended', 'context left suspended');
+      expectEqual(MockAudioContext.oscs.length, 2, 'graph still wired (two oscillators)');
+      // First user gesture → clean resume
+      MockAudioContext.resumable = true;
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'playback resumes after gesture');
+      expectEqual(fb.autoplayBlocked, false, 'block cleared after gesture');
+      expectEqual(MockAudioContext.instances.at(-1).state, 'running', 'context running');
+      expectEqual(MockAudioContext.oscs.at(-2).frequency.value, 200, 'alpha left intact');
+      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 214, 'alpha right intact');
+    });
+  } finally {
+    MockAudioContext.resumable = true;
+    env.restore();
+  }
+}
+
+/* ===========================================================================
+ * SCENARIO 45 : CLIENT MEMORY — Node churn across pomodoro phases & ambient storms
+ * ======================================================================== */
+async function clientMemoryLeakScenarios() {
+  const env = installClientEnv();
+  try {
+    env.ls._clear();
+    env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-LEAK');
+    env.G.fetch = validLicenseFetch();
+    const c = await freshClient(env);
+    const fb = c.FocusBot;
+    await sleep(30);
+
+    /* ---- SCENARIO 45 ---- */
+    await scenario('45. Memory: phase cycles + ambient toggles do not leak AudioNodes', async () => {
+      // (a) ONE graph serves the whole pomodoro life — phases must not churn it
+      fb.pomodoro.start();
+      await waitFor(() => fb.isPlaying, 2000, 'playing for phase-cycling test');
+      const it = env.intervals.filter((x) => x.fn.toString().includes('pomodoroTick')).at(-1);
+      expectTrue(!!it, 'pomodoro tick registered');
+      const oscsBase = MockAudioContext.oscs.length;
+      const gainsBase = MockAudioContext.gains.length;
+      const sourcesBase = MockAudioContext.sources.length;
+      for (let i = 0; i < 1500; i++) it.fn(); // focus → break (audio off)
+      for (let i = 0; i < 300; i++) it.fn();  // break → focus (audio on)
+      fb.pomodoro.reset();
+      expectEqual(MockAudioContext.gains.length, gainsBase, 'no GainNode churn across phases');
+      expectEqual(MockAudioContext.oscs.length, oscsBase, 'no Oscillator churn across phases');
+      expectEqual(MockAudioContext.sources.length, sourcesBase, 'no stray BufferSources (ambient off)');
+
+      // (b) ambient toggle storm: every replaced source is stopped AND
+      //     disconnected; toggling must never allocate a second gain node
+      const srcStart = MockAudioContext.sources.length;
+      const gainStart = MockAudioContext.gains.length;
+      const kills = [];
+      for (let i = 0; i < 4; i++) {
+        const prior = MockAudioContext.sources.at(-1);
+        fb.setAmbient('white');
+        if (prior) kills.push(prior);
+        fb.setAmbient('off');
+      }
+      expectEqual(fb.ambient, 'off', 'off after storm');
+      expectEqual(MockAudioContext.gains.length, gainStart, 'ambient toggles reuse gain nodes');
+      expectEqual(MockAudioContext.sources.length, srcStart + 4, 'exactly 4 sources, one per toggle');
+      for (const s of kills) {
+        expectEqual(s._stopped, true, 'replaced source stop()ed');
+        expectEqual(s.connections.length, 0, 'replaced source disconnected');
+      }
+      const last = MockAudioContext.sources.at(-1);
+      expectEqual(last._stopped, true, 'final source torn down by off');
+      expectEqual(last.connections.length, 0, 'final source disconnected');
+      expectEqual(MockAudioContext.instances.length, 1, 'single AudioContext the whole time');
+    });
+  } finally { env.restore(); }
+}
+
+/* ===========================================================================
+ * SCENARIO 46 : CLIENT STORAGE RESILIENCE
+ * Corrupt / legacy-junk analytics payloads + failing chrome.storage must never
+ * crash the widget; analytics keeps tallying from in-memory state.
+ * ======================================================================== */
+async function clientStorageResilienceScenarios() {
+  const env = installClientEnv();
+  try {
+    env.ls._clear();
+    env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-STORE');
+    env.G.fetch = validLicenseFetch();
+    const pad = (n) => (n < 10 ? '0' + n : String(n));
+    const tid = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    const today = tid(new Date());
+
+    /* ---- SCENARIO 46 ---- */
+    await scenario('46. Storage: corrupt & legacy-junk analytics + failing storage recover cleanly', async () => {
+      // 46a: non-JSON analytics blob → fresh start
+      env.ls.setItem('focusbot.analytics', '{ definitely not json');
+      const c1 = await freshClient(env);
+      await sleep(30);
+      let f = c1.FocusBot;
+      let st = await f.analytics.getStats();
+      expectEqual(st.todayMs, 0, 'corrupt blob → clean 0s');
+
+      // 46b: legacy junk values (string timestamps, arrays) must be coerced
+      env.ls.setItem('focusbot.analytics', JSON.stringify({ days: { [today]: '12m45s', '2020-01-01': [5000, 5000] } }));
+      const c2 = await freshClient(env);
+      await sleep(30);
+      f = c2.FocusBot;
+      st = await f.analytics.getStats();
+      expectEqual(st.todayMs, 0, 'string junk value coerced to 0 (no NaN concatenation)');
+      expectTrue(Number.isFinite(st.weekMs), 'weekMs stays a finite number');
+
+      // 46c: array-shaped days map (old schema) → ignored, fresh start
+      env.ls.setItem('focusbot.analytics', JSON.stringify({ days: [5000, 5000, 5000] }));
+      const c3 = await freshClient(env);
+      await sleep(30);
+      f = c3.FocusBot;
+      st = await f.analytics.getStats();
+      expectEqual(st.todayMs, 0, 'array days (old schema) ignored');
+
+      // 46d: chrome.storage keeps failing (QUOTA/lastError) → analytics runs in memory
+      const chMap = new Map();
+      env.G.chrome = {
+        runtime: { lastError: { message: 'QUOTA_BYTES_PER_ITEM quota was exceeded' } },
+        storage: {
+          local: {
+            get(k, cb) { const out = {}; if (chMap.has(k)) out[k] = chMap.get(k); cb(out); },
+            set(o, cb) { for (const k in o) chMap.set(k, o[k]); if (cb) cb(); },
+          },
+        },
+      };
+      const c4 = await freshClient(env);
+      await sleep(30);
+      f = c4.FocusBot;
+      f.pomodoro.start();
+      const at = env.intervals.filter((x) => x.fn.toString().includes('analyticsTick')).at(-1);
+      expectTrue(!!at, 'analytics tick registered');
+      for (let i = 0; i < 12; i++) at.fn();
+      await sleep(20);
+      st = await f.analytics.getStats();
+      expectTrue(st.todayMs >= 12000, 'focus time still banked under storage failure (got ' + st.todayMs + ')');
+      expectEqual(f.pomodoro.getState().running, true, 'widget keeps running through storage failures');
+    });
+  } finally { env.restore(); }
+}
+
+/* ===========================================================================
+ * SCENARIO 47-50 : EXTENSION / MV3 PACKAGE AUDIT + ENGINE TOKEN LIFECYCLE
+ * ======================================================================== */
+async function extensionAuditScenarios() {
+
+  /* ---- SCENARIO 47 ---- */
+  await scenario('47. Popup: dead-channel bridge → no_listener note; live widget recovers', async () => {
+    const penv = installClientEnv();
+    const mkEl = (id) => {
+      if (!docEls.has(id)) {
+        docEls.set(id, {
+          id, textContent: '', hidden: false, style: {}, dataset: {}, disabled: false, handlers: {},
+          classList: makeClassList(),
+          addEventListener(t, f) { this.handlers[t] = f; },
+          querySelectorAll: () => [],
+          querySelector: () => null,
+        });
+      }
+      return docEls.get(id);
+    };
+    const docEls = new Map();
+    const pdoc = {
+      listeners: {},
+      addEventListener: (t, f) => { (pdoc.listeners[t] ??= []).push(f); },
+      getElementById: (id) => mkEl(id),
+      querySelector: (sel) => mkEl('sel:' + sel),
+    };
+    const sent = [];
+    let deadChannel = true;
+    const chromeStub = {
+      tabs: {
+        query: (q, cb) => cb([{ id: 42 }]),
+        sendMessage: (tabId, msg, cb) => {
+          sent.push(msg);
+          if (deadChannel) { cb(null); return; } // channel closed mid-flight
+          if (msg.cmd === 'getState') cb({ ok: true, state: { pro: true, playing: true, mode: 'alpha', ambient: 'off', pomodoro: { running: true, state: 'focus', remainingMs: 600000 } } });
+          else if (msg.cmd === 'analytics') cb({ ok: true, state: { today: '12m', week: '3h' } });
+          else cb({ ok: true });
+        },
+      },
+      runtime: { lastError: null },
+    };
+    const savedDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    const savedChrome = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
+    const savedST = Object.getOwnPropertyDescriptor(globalThis, 'setTimeout');
+    Object.defineProperty(globalThis, 'document', { value: pdoc, writable: true, configurable: true });
+    Object.defineProperty(globalThis, 'chrome', { value: chromeStub, writable: true, configurable: true });
+    // The popup's poll chains use real timers (setInterval is mocked by the
+    // client env but setTimeout is not) — neutralise them so the Node process
+    // can exit once the suite finishes, then re-enable for our own backoff.
+    Object.defineProperty(globalThis, 'setTimeout', { value: () => 0, writable: true, configurable: true });
+    const waitTick = (ms) => new Promise((r) => savedST.value(r, ms));
+    try {
+      // IIFE boot: every DOM element is resolved up-front (els.*)
+      await import(new URL('../client/popup.js', import.meta.url).href + '?popup=1');
+
+      // Phase 1 — the content-script half is gone (message channel closed):
+      chromeStub.runtime.lastError = { message: 'message channel closed before a response was received' };
+      for (const f of pdoc.listeners.DOMContentLoaded || []) f();
+      await waitTick(20);
+      expectTrue(sent.some((m) => m.cmd === 'getState'), 'popup asked for widget state');
+      expectTrue(mkEl('no-widget').classList.contains('hidden') === false, 'disconnected note shown (no crash, lastError consumed)');
+
+      // Phase 2 — widget responds live: render + analytics + no-widget hides
+      deadChannel = false;
+      chromeStub.runtime.lastError = null;
+      for (const f of pdoc.listeners.DOMContentLoaded || []) f();
+      await waitTick(20);
+      expectTrue(mkEl('no-widget').classList.contains('hidden'), 'disconnected note hidden with live widget');
+      expectEqual(mkEl('st-state').textContent, 'Playing', 'live state rendered');
+      expectEqual(mkEl('pro-chip').style.display, '', 'pro chip shown');
+      expectEqual(mkEl('st-today').textContent, '12m', 'analytics stat rendered');
+    } finally {
+      if (savedST) Object.defineProperty(globalThis, 'setTimeout', savedST); else delete globalThis.setTimeout;
+      if (savedChrome) Object.defineProperty(globalThis, 'chrome', savedChrome); else delete globalThis.chrome;
+      if (savedDoc) Object.defineProperty(globalThis, 'document', savedDoc); else delete globalThis.document;
+      penv.restore();
+    }
+  });
+
+  /* ---- SCENARIO 48 ---- */
+  await scenario('48. Manifest audit: MV3, iframes excluded, storage permission, popup wired', async () => {
+    const fsMod = await import('node:fs');
+    const manifestPath = new URL('../client/manifest.json', import.meta.url);
+    expectTrue(fsMod.existsSync(manifestPath), 'manifest.json present');
+    const manifest = JSON.parse(fsMod.readFileSync(manifestPath, 'utf8'));
+    expectEqual(manifest.manifest_version, 3, 'MV3');
+    const cs = manifest.content_scripts && manifest.content_scripts[0];
+    expectTrue(!!cs, 'content_scripts declared');
+    expectEqual(cs.all_frames, false, 'no double audio in iframes');
+    expectEqual(cs.match_about_blank, false, 'about:blank not injected');
+    expectEqual(cs.run_at, 'document_end', 'injected after DOM');
+    expectTrue(Array.isArray(manifest.permissions) && manifest.permissions.includes('storage'), 'storage permission present');
+    expectEqual(manifest.action && manifest.action.default_popup, 'popup.html', 'popup.html wired as action');
+    for (const f of ['popup.html', 'popup.js', 'focus-bot.css']) {
+      expectTrue(fsMod.existsSync(new URL('../client/' + f, import.meta.url)), f + ' exists');
+    }
+  });
+
+  /* ---- SCENARIO 49 ---- */
+  await scenario('49. Client: stale engine token discarded → safe matrix; fresh token applied', async () => {
+    const envA = installClientEnv();
+    try {
+      envA.ls._clear();
+      envA.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-EXPIRED-ENGINE');
+      const expired = signedToken({ v: 1, seed: 1, gain: 1, exp: Date.now() - 5000, mods: { beta: { l: 111, r: 222, ph: 0, k: 1 } } });
+      envA.G.fetch = validLicenseFetch({ engine: expired });
+      let c = await freshClient(envA);
+      await sleep(30);
+      let f = c.FocusBot;
+      expectEqual(f.isPro, true, 'pro stays active with stale token');
+      f.play();
+      await waitFor(() => f.isPlaying, 2000, 'plays with stale token');
+      expectEqual(MockAudioContext.oscs.at(-2).frequency.value, 200, 'fallback left 200 (stale token ignored)');
+      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 214, 'fallback right 214');
+    } finally { envA.restore(); }
+  });
+
+  /* ---- SCENARIO 50 ---- */
+  await scenario('50. Worker: engine token replay-safe — iat + 12h exp embedded (fresh re-issue)', async () => {
+    const kv = new KVMock();
+    const env = makeEnv(kv);
+    const g = await postJSON(env, '/api/admin/grant', { domains: ['replay.test'], days: 30 }, { authorization: 'Bearer ' + ADMIN_TOKEN });
+    expectEqual(g.status, 201, 'grant ok');
+    const key = (await g.json()).licenseKey;
+    const res = await postJSON(env, '/api/verify-license', { apiKey: key, domain: 'replay.test' });
+    expectEqual(res.status, 200, 'verify ok');
+    const v = await res.json();
+    const [h, sig] = v.engine.split('.');
+    expectTrue(!!h && !!sig, 'token has header+signature');
+    const payload = JSON.parse(atob(h.replace(/-/g, '+').replace(/_/g, '/')));
+    expectEqual(payload.v, 1, 'version');
+    expectEqual(payload.exp - payload.iat, 12 * 3600 * 1000, 'iat..exp window = 12h');
+    expectTrue(payload.iat <= Date.now() && payload.exp > Date.now(), 'token is live right now');
+    // Re-verify issues a fresh token → no stable replay vector
+    const res2 = await postJSON(env, '/api/verify-license', { apiKey: key, domain: 'replay.test' });
+    const v2 = await res2.json();
+    const p2 = JSON.parse(atob(v2.engine.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+    expectTrue(p2.iat >= payload.iat, 'token re-issued with a fresh iat');
+  });
+
+  /* ---- SCENARIO 51 (fresh token client-side) ---- */
+  await scenario('51. Client: fresh & forged-proof engine token drives exact matrix + gain', async () => {
+    const envB = installClientEnv();
+    try {
+      envB.ls._clear();
+      envB.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-FRESH-ENGINE');
+      const fresh = signedToken({ v: 1, seed: 1, gain: 0.9, exp: Date.now() + 3600 * 1000, mods: { beta: { l: 220, r: 236, ph: 0, k: 1 } } });
+      envB.G.fetch = validLicenseFetch({ engine: fresh });
+      const c = await freshClient(envB);
+      await sleep(30);
+      const f = c.FocusBot;
+      f.play();
+      await waitFor(() => f.isPlaying, 2000, 'plays with fresh token');
+      expectEqual(MockAudioContext.oscs.at(-2).frequency.value, 220, 'fresh token left 220');
+      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 236, 'fresh token right 236');
+      const g = MockAudioContext.gains.at(-1).gain;
+      expectApprox(g.lastRamp, 0.05 * 0.7 * 0.9, 1e-9, 'fresh gain 0.9 applied');
+    } finally { envB.restore(); }
+  });
+}
+
+/* ===========================================================================
+ * SCENARIO 52-55 : WEBSTORE COMPLIANCE (dynamic BTC rate endpoint, store
+ * manifest requirements, offline/privacy assurance, client modal pricing)
+ * ======================================================================== */
+async function webstoreComplianceScenarios() {
+
+  /* ---- SCENARIO 52 ---- */
+  await scenario('52. GET /api/get-btc-rate → dynamic 12 EUR pricing + btcAmount', async () => {
+    const kv = new KVMock();
+    const env = makeEnv(kv);
+    const MOCK_BTC_EUR = 50000;
+    const MOCK_REQUIRED_SATS = Math.ceil((12 / MOCK_BTC_EUR) * 100_000_000);
+    await kv.put('pricing:cache', JSON.stringify({
+      btcEurPrice: MOCK_BTC_EUR,
+      requiredSats: MOCK_REQUIRED_SATS,
+      minAcceptableSats: Math.ceil(MOCK_REQUIRED_SATS * 0.97),
+      fetchedAt: Date.now(),
+    }));
+
+    const res = await getURL(env, '/api/get-btc-rate');
+    expectEqual(res.status, 200, 'get-btc-rate status');
+    const body = await res.json();
+    expectEqual(body.ok, true, 'ok flag');
+    expectEqual(body.eur, 12, 'eur = 12');
+    expectEqual(body.btcEurPrice, MOCK_BTC_EUR, 'btcEurPrice from cache');
+    expectEqual(body.requiredSats, MOCK_REQUIRED_SATS, 'requiredSats');
+    expectEqual(body.btcAmount, (MOCK_REQUIRED_SATS / 100_000_000).toFixed(8), 'btcAmount → 8 decimals');
+  });
+
+  /* ---- SCENARIO 53 ---- */
+  await scenario('53. Store manifest: v1.3.0, full icon set wired, developer/homepage_url, minimal permissions', async () => {
+    const fsMod = await import('node:fs');
+    const manifestPath = new URL('../client/manifest.json', import.meta.url);
+    expectTrue(fsMod.existsSync(manifestPath), 'manifest.json present');
+    const manifest = JSON.parse(fsMod.readFileSync(manifestPath, 'utf8'));
+    expectEqual(manifest.version, '1.3.0', 'version pinned to 1.3.0');
+    expectEqual(manifest.manifest_version, 3, 'MV3');
+
+    // Icon set: 16/32/48/128 files exist AND are wired into icons + default_icon
+    for (const s of ['16', '32', '48', '128']) {
+      const ipath = manifest.icons && manifest.icons[s];
+      expectTrue(typeof ipath === 'string' && ipath.length > 0, 'icons.' + s + ' wired');
+      expectTrue(fsMod.existsSync(new URL('../client/' + ipath, import.meta.url)), 'icon file present: ' + s);
+      const dpath = manifest.action && manifest.action.default_icon && manifest.action.default_icon[s];
+      expectTrue(typeof dpath === 'string' && dpath.length > 0, 'action.default_icon.' + s + ' wired');
+      expectEqual(dpath, ipath, 'default_icon["' + s + '"] matches icons.' + s);
+    }
+
+    // Store identity fields
+    expectTrue(!!manifest.developer && typeof manifest.developer.name === 'string' && manifest.developer.name.length > 0, 'developer.name set');
+    expectTrue(!!manifest.developer && typeof manifest.developer.url === 'string' && /^https:\/\//.test(manifest.developer.url), 'developer.url is https');
+    expectTrue(typeof manifest.homepage_url === 'string' && /^https:\/\//.test(manifest.homepage_url), 'homepage_url is https');
+
+    // Minimal permission footprint: only storage + notifications, no host_permissions
+    const perms = manifest.permissions || [];
+    const allowed = ['storage', 'notifications'];
+    for (const p of perms) {
+      expectTrue(allowed.includes(p), 'permission "' + p + '" is within the minimal set');
+    }
+    for (const a of allowed) {
+      expectTrue(perms.includes(a), 'required permission "' + a + '" declared');
+    }
+    expectEqual(perms.length, allowed.length, 'no extra permissions (got ' + JSON.stringify(perms) + ')');
+    expectTrue(manifest.host_permissions === undefined || manifest.host_permissions.length === 0, 'no host_permissions');
+
+    // popup + content scripts still wired
+    expectEqual(manifest.action && manifest.action.default_popup, 'popup.html', 'popup wired');
+    expectEqual(manifest.content_scripts[0].all_frames, false, 'all_frames:false');
+  });
+
+  /* ---- SCENARIO 54 ---- */
+  await scenario('54. Offline privacy: analytics persist to chrome.storage.local only, zero network writes', async () => {
+    const env = installClientEnv();
+    try {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-PRIVACY');
+      const chMap = new Map();
+      env.G.chrome = {
+        storage: {
+          local: {
+            get(k, cb) { const out = {}; if (chMap.has(k)) out[k] = chMap.get(k); cb(out); },
+            set(o, cb) { for (const k in o) chMap.set(k, o[k]); if (cb) cb(); },
+          },
+        },
+      };
+      // Provide a valid license at boot so the widget activates Pro locally
+      env.G.fetch = validLicenseFetch();
+      const c = await freshClient(env);
+      await sleep(30);
+      const fb = c.FocusBot;
+      expectEqual(fb.isPro, true, 'pro provisioned in offline storage test');
+
+      // After boot, EVERY other network call is counted — none may carry data.
+      let networkCalls = 0;
+      env.G.fetch = async (url) => {
+        const u = String(url);
+        if (u.includes('/api/verify-license')) {
+          return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+        }
+        networkCalls++;
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      };
+
+      fb.pomodoro.start();
+      await waitFor(() => fb.isPlaying, 2000, 'playing for privacy test');
+      const at = env.intervals.filter((x) => x.fn.toString().includes('analyticsTick')).at(-1);
+      for (let i = 0; i < 12; i++) at.fn();
+      await sleep(20);
+
+      // Focus data landed in chrome.storage.local — never on the wire
+      const saved = chMap.get('focusbot.analytics');
+      expectTrue(!!saved, 'analytics stored in chrome.storage.local');
+      const parsed = JSON.parse(saved);
+      expectTrue(!!parsed.days && typeof parsed.days === 'object', 'analytics payload local-only format');
+      expectEqual(networkCalls, 0, 'zero focus-data bytes left the device');
+      const st = await fb.analytics.getStats();
+      expectTrue(st.todayMs >= 12000, 'focus time tallied from local storage');
+    } finally { env.restore(); }
+  });
+
+  /* ---- SCENARIO 55 ---- */
+  await scenario('55. Client: payment modal shows dynamic "12 € (~0.00018182 BTC)" from /api/get-btc-rate', async () => {
+    const env = installClientEnv();
+    try {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-PRICING');
+      env.G.fetch = async (url) => {
+        const u = String(url);
+        if (u.includes('/api/verify-license')) {
+          return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 365 * 86400000 }) };
+        }
+        if (u.includes('/api/get-btc-rate')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, eur: 12, btcEurPrice: 66000, requiredSats: 18182, btcAmount: '0.00018182' }) };
+        }
+        throw new Error('unexpected: ' + u);
+      };
+      const c = await freshClient(env);
+      await sleep(30);
+      c.FocusBot.openPro();
+      await sleep(40);
+      const text = c.stub('.btc-price').textContent || '';
+      expectTrue(text.indexOf('12') !== -1, 'modal shows 12 EUR (got: ' + text + ')');
+      expectTrue(text.indexOf('0.00018182') !== -1, 'modal shows dynamic BTC amount (got: ' + text + ')');
+      expectTrue(text.indexOf('BTC') !== -1, 'modal mentions BTC');
+      // Hard paywall stays intact: no license → play is still blocked
+      env.ls.removeItem('focusbot.licenseKey');
+      const c2 = await freshClient(env);
+      await sleep(30);
+      c2.FocusBot.play();
+      await sleep(20);
+      expectEqual(c2.FocusBot.isPlaying, false, 'paywall still enforced');
+      expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext without license');
+    } finally { env.restore(); }
+  });
+}
 console.log(`
 ${C.b}${C.B}FocusBot Automated Test Suite${C.x}
 ${C.d}Node ${process.version} · zero external dependencies${C.x}`);
@@ -1806,6 +2412,7 @@ try {
 
   section('WORKER — Edge Cases & Stress Audit (worker/index.js)');
   await workerEdgeCaseScenarios();
+  await workerAbuseScenarios();
 
   section('CLIENT — Quota and Audio Engine (client/focus-bot.js)');
   await clientScenarios();
@@ -1823,8 +2430,17 @@ try {
   await productivityScenarios();
   await ambientMixerScenarios();
 
+  section('CLIENT — Autoplay Policy, Memory & Storage Resilience');
+  await clientAutoplayScenarios();
+  await clientMemoryLeakScenarios();
+  await clientStorageResilienceScenarios();
+
   section('CLIENT — Hardening & MV3 Bridge (engine token, chrome.storage, popup)');
   await clientHardeningScenarios();
+  await extensionAuditScenarios();
+
+  section('WEBSTORE — Store Compliance (BTC rate endpoint, manifest, privacy, modal)');
+  await webstoreComplianceScenarios();
 } catch (err) {
   console.error(`\n${C.r}[FATAL]${C.x} Test infrastructure crashed:`, err);
   process.exitCode = 1;

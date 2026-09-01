@@ -140,6 +140,8 @@
     audioCtx: null,      // single AudioContext — created once
     nodes: null,         // { oscL, oscR, merger, boostGain, ambGain, masterGain, amb }
     suspendTimer: null,
+    autoplayBlocked: false,       // browser refused resume() until a user gesture
+    autoplayNoticeShown: false,   // only surface the autoplay toast once
 
     /* Smart Pomodoro */
     pomodoro: {
@@ -178,7 +180,15 @@
       const json = atob(body.replace(/-/g, '+').replace(/_/g, '/'));
       const data = JSON.parse(json);
       if (!data || data.v !== 1 || !data.mods) return null;
-      return { v: data.v, seed: data.seed, gain: Number(data.gain) || 1, mods: data.mods };
+      // Replay/expiry guard: an expired token is discarded silently and the
+      // safe fallback matrix is used instead of granting coefficients.
+      if (data.exp && Date.now() > data.exp) return null;
+      return {
+        v: data.v,
+        seed: data.seed,
+        gain: Number.isFinite(Number(data.gain)) ? Number(data.gain) : 1,
+        mods: data.mods,
+      };
     } catch (_) { return null; }
   }
 
@@ -187,7 +197,9 @@
     const m = MODES[STATE.mode];
     const em = STATE.engine && STATE.engine.mods && STATE.engine.mods[STATE.mode];
     if (em && Number.isFinite(em.l) && Number.isFinite(em.r)) {
-      return { left: em.l, right: em.r };
+      // Coefficients from a tampered token are clamped to the safe 0–1000 Hz
+      // range used by the custom-frequency UI (hearing safety).
+      return { left: clampHz(em.l), right: clampHz(em.r) };
     }
     return { left: m.left, right: m.right };
   }
@@ -252,8 +264,12 @@
   }
 
   function gainTarget() {
-    const g = STATE.engine && Number.isFinite(STATE.engine.gain) ? STATE.engine.gain : 1;
-    return MASTER_GAIN_MAX * STATE.volume * g;
+    const g = STATE.engine && Number.isFinite(STATE.engine.gain)
+      ? Math.max(0, STATE.engine.gain)
+      : 1;
+    // Hard cap: a tampered coefficient (e.g. gain → 999) must never push the
+    // master gain above the MASTER_GAIN_MAX hearing-safety ceiling.
+    return Math.min(MASTER_GAIN_MAX, MASTER_GAIN_MAX * STATE.volume * g);
   }
 
   function startPlayback() {
@@ -279,10 +295,26 @@
     applyFrequencies();
 
     const p = STATE.audioCtx.resume();
-    if (p && typeof p.then === 'function') p.catch(function () {});
     if (STATE.audioCtx.state !== 'running') STATE.audioCtx.state = 'running';
+    if (p && typeof p.then === 'function') {
+      p.catch(function () {
+        // Browser autoplay policy: audio stayed blocked because there was no
+        // user gesture. Do NOT keep claiming playback — mark it blocked so the
+        // widget shows the real state, analytics stop counting, and the first
+        // real click (→ startPlayback) resumes cleanly.
+        if (STATE.audioCtx && STATE.audioCtx.state !== 'suspended') STATE.audioCtx.state = 'suspended';
+        STATE.playing = false;
+        STATE.autoplayBlocked = true;
+        updatePlayingUI();
+        if (!STATE.autoplayNoticeShown) {
+          STATE.autoplayNoticeShown = true;
+          toast('Play blocked by your browser \u2014 tap play once to enable audio.', 'info');
+        }
+      });
+    }
 
     STATE.playing = true;
+    STATE.autoplayBlocked = false;
     updatePlayingUI();
   }
 
@@ -455,22 +487,21 @@
   }
 
   /**
-   * Fetch live pricing from /api/pricing and update the modal display.
-   * Shows: "12 € = 0.000XXXXX BTC (X sats)" — or a fallback on error.
+   * Fetch live pricing from /api/get-btc-rate and update the modal display.
+   * Shows: "Yıllık Lisans: 12 € (~0.00018 BTC)" — or a fallback on error.
    */
   async function fetchPricing() {
     let data;
     try {
-      const res = await fetch(CONFIG.endpoint + '/api/pricing');
+      const res = await fetch(CONFIG.endpoint + '/api/get-btc-rate');
       if (res.ok) data = await res.json();
     } catch (_) { /* offline or error — use fallback */ }
 
     if (data && data.ok) {
-      const btc = (data.requiredSats / 100_000_000).toFixed(8);
-      els.btcPrice.textContent = data.eur + ' \u20AC = ' + btc + ' BTC (' + data.requiredSats.toLocaleString() + ' sats)';
+      els.btcPrice.textContent = 'Y\u0131ll\u0131k Lisans: ' + data.eur + ' \u20AC (~' + data.btcAmount + ' BTC)';
     } else {
       // Fallback: show static estimate
-      els.btcPrice.textContent = '12 \u20AC \u00B7 ' + CONFIG.priceBtc;
+      els.btcPrice.textContent = 'Y\u0131ll\u0131k Lisans: 12 \u20AC (~' + CONFIG.priceBtc + ')';
     }
   }
 
@@ -567,7 +598,15 @@
       try {
         const ch = (typeof chrome !== 'undefined') ? chrome : null;
         if (ch && ch.storage && ch.storage.local && typeof ch.storage.local.set === 'function') {
-          ch.storage.local.set({ [key]: value }, () => { try { resolve(true); } catch (_) { resolve(true); } });
+          ch.storage.local.set({ [key]: value }, () => {
+            try {
+              // A storage write can still fail (quota exceeded, incognito)
+              // — surface it instead of reporting a false success. Analytics
+              // keeps working from memory either way.
+              const blocked = ch.runtime && ch.runtime.lastError;
+              resolve(!blocked);
+            } catch (_) { resolve(true); }
+          });
           return;
         }
       } catch (_) { /* no chrome.storage */ }
@@ -584,8 +623,10 @@
     try {
       const raw = await storageGet(LS.analytics);
       const parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && parsed.days && typeof parsed.days === 'object') days = parsed.days;
-    } catch (_) { /* fresh start */ }
+      if (parsed && parsed.days && typeof parsed.days === 'object' && !Array.isArray(parsed.days)) {
+        days = parsed.days;
+      }
+    } catch (_) { /* corrupt payload → fresh start */ }
     if (!STATE.analytics.days) STATE.analytics.days = days;
     return days;
   }
@@ -603,7 +644,9 @@
     const today = dayId(new Date());
     // Only count while a focus cycle is actively threading audio
     if (STATE.pomodoro.running && STATE.pomodoro.state === 'focus' && STATE.playing) {
-      days[today] = (days[today] || 0) + 1000;
+      // Numeric-safe: a tampered/corrupt value must never string-concatenate.
+      const prev = Number(days[today]);
+      days[today] = (Number.isFinite(prev) && prev > 0 ? prev : 0) + 1000;
     }
     STATE.analytics.flushTick++;
     if (STATE.analytics.flushTick >= 10) {
@@ -615,12 +658,16 @@
   async function getStats() {
     const days = await loadAnalytics();
     const today = dayId(new Date());
-    let todayMs = days[today] || 0;
+    let todayMs = Number(days[today]);
+    todayMs = Number.isFinite(todayMs) && todayMs > 0 ? todayMs : 0;
     let weekMs = 0;
     const d = new Date();
     for (let i = 0; i < 7; i++) {
       const k = dayId(d);
-      if (!isNaN(d.getTime())) weekMs += days[k] || 0;
+      if (!isNaN(d.getTime())) {
+        const wk = Number(days[k]);
+        if (Number.isFinite(wk) && wk > 0) weekMs += wk;
+      }
       d.setDate(d.getDate() - 1);
     }
     todayMs = Math.max(0, todayMs);
@@ -764,8 +811,19 @@
     STATE.ambient = kind;
     ensureContext();
     if (STATE.nodes && STATE.nodes.ambGain) STATE.nodes.ambGain.gain.value = 0;
-    if (STATE.nodes && STATE.nodes.amb && STATE.nodes.amb.src) {
-      try { STATE.nodes.amb.src.stop(); } catch (_) {}
+    // Tear down the previous layer completely (stop + disconnect) so no
+    // AudioNode stays routed to the graph across repeated ambient toggles.
+    if (STATE.nodes && STATE.nodes.amb) {
+      const old = STATE.nodes.amb;
+      try {
+        if (old.src) {
+          old.src.stop();
+          if (old.src.disconnect) old.src.disconnect();
+        }
+      } catch (_) {}
+      try {
+        if (old.head && old.head !== old.src && old.head.disconnect) old.head.disconnect();
+      } catch (_) {}
       STATE.nodes.amb = null;
     }
     if (kind === 'off') { updateAmbientUI(); return; }
@@ -1381,6 +1439,7 @@
     return {
       pro: STATE.pro,
       playing: STATE.playing,
+      autoplayBlocked: STATE.autoplayBlocked,
       mode: STATE.mode,
       volume: STATE.volume,
       ambient: STATE.ambient,
@@ -1510,6 +1569,7 @@
 
     get isPro() { return STATE.pro; },
     get isPlaying() { return STATE.playing; },
+    get autoplayBlocked() { return STATE.autoplayBlocked; },
 
     /* ---- v4 suite API ---- */
     getState: getPublicState,

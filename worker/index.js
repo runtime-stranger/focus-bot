@@ -93,6 +93,9 @@ export default {
         case 'GET /api/pricing':
           return await handlePricing(env, cors);
 
+        case 'GET /api/get-btc-rate':
+          return await handleGetBtcRate(env, cors);
+
         case 'POST /api/verify-license':
           return await handleVerifyLicense(request, env, ctx, cors);
 
@@ -126,6 +129,23 @@ async function handlePricing(env, cors) {
     btcEurPrice: pricing.btcEurPrice,
     requiredSats: pricing.requiredSats,
     minAcceptableSats: pricing.minAcceptableSats,
+  }, 200, cors);
+}
+
+/* ==========================================================================
+ * 1b) GET /api/get-btc-rate — DYNAMIC BTC RATE FOR CLIENT MODAL
+ *     Returns { ok, eur, btcEurPrice, requiredSats, btcAmount } where
+ *     btcAmount is the human-readable BTC string (e.g. "0.00018").
+ * ======================================================================== */
+async function handleGetBtcRate(env, cors) {
+  const pricing = await getDynamicPricing(env);
+  const btcAmount = (pricing.requiredSats / SATS_PER_BTC).toFixed(8);
+  return json({
+    ok: true,
+    eur: PRICE_EUR,
+    btcEurPrice: pricing.btcEurPrice,
+    requiredSats: pricing.requiredSats,
+    btcAmount,
   }, 200, cors);
 }
 
@@ -239,6 +259,9 @@ async function handleVerifyLicense(request, env, ctx, cors) {
  * ======================================================================== */
 const ENGINE_ALG = { name: 'HMAC', hash: 'SHA-256' };
 const ENGINE_PAYLOAD_VERSION = 1;
+/** Engine token lifetime — rebinds the coefficient payload to fresh license
+ *  verifications so a replayed/stale token expires on its own. */
+const ENGINE_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
 function b64url(s) {
   return btoa(String(s))
@@ -281,7 +304,10 @@ async function hmacSign(data, secret) {
 /** Build `b64url(payload).sig(b64url(payload))` token for the client. */
 async function buildEngineToken(env) {
   const secret = String(env.ENGINE_SECRET || env.ADMIN_TOKEN || 'focusbot-engine-default').trim();
-  const payload = engineCoefficients(Date.now() % 0x0fffffff);
+  const now = Date.now();
+  const payload = engineCoefficients(now % 0x0fffffff);
+  payload.iat = now;                               // issued-at → replay protection
+  payload.exp = now + ENGINE_TOKEN_TTL_MS;         // token expires independently
   const body = b64url(JSON.stringify(payload));
   let sig = '';
   try { sig = await hmacSign(body, secret); } catch (_) { /* import fallback below */ }
@@ -354,10 +380,15 @@ async function handleVerifyTx(request, env, cors) {
   }
 
   // e) Sum all matching outputs — same address may appear in multiple vout entries
+  //    Defensive: only finite, positive satoshis count (a NaN/negative value must
+  //    never satisfy the amount check).
   const vout = Array.isArray(tx && tx.vout) ? tx.vout : [];
   const totalPaid = vout
     .filter((o) => o && o.scriptpubkey_address === target)
-    .reduce((sum, o) => sum + Number(o.value || 0), 0);
+    .reduce((sum, o) => {
+      const v = Number(o.value);
+      return sum + (Number.isFinite(v) && v > 0 ? v : 0);
+    }, 0);
   if (totalPaid < requiredSats) {
     return json({ ok: false, error: 'insufficient_amount', required: requiredSats, paid: totalPaid }, 402, cors);
   }
@@ -487,14 +518,18 @@ function corsHeaders(request, env) {
   return h;
 }
 
-/** Safe body reading (≤64KB, JSON) */
+/** Safe body reading (≤64KB, JSON, object only).
+ *  Empty, malformed, oversized or non-object JSON ('null', arrays, numbers)
+ *  all resolve to {} so route handlers never see primitive values. */
 async function readJson(request) {
   try {
     const ct = request.headers.get('content-type') || '';
     if (!ct.includes('application/json')) return {};
     const text = await request.text();
     if (text.length > 65536) throw new Error('body_too_large');
-    return text ? JSON.parse(text) : {};
+    if (!text || !text.trim()) return {};
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch (_) {
     return {};
   }

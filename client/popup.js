@@ -42,6 +42,13 @@
         } else {
           try {
             sendFn(tab.id, msg, (res) => {
+              // Consume any runtime error here (e.g. "message channel closed
+              // before a response was received" when the popup is being torn
+              // down). Reading lastError inside the callback is what suppresses
+              // the unhandled console noise, while keeping the response path.
+              try {
+                if (chrome.runtime && chrome.runtime.lastError) { void chrome.runtime.lastError; }
+              } catch (_) { /* popup context already gone */ }
               resolve(res && res.ok !== undefined ? res : { ok: false, error: 'no_listener' });
             });
           } catch (_) {
