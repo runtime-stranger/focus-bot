@@ -2401,6 +2401,57 @@ async function webstoreComplianceScenarios() {
       expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext without license');
     } finally { env.restore(); }
   });
+
+  /* ---- SCENARIO 56 ---- */
+  await scenario('56. Payment modal: × button, ESC key and backdrop all close; paywall reopens', async () => {
+    const env = installClientEnv();
+    try {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      const closeBtn = c.stub('.modal-close');
+      expectTrue(!!closeBtn, 'close (×) button present in modal template');
+      expectTrue((c.root.innerHTML || '').includes('aria-label="Close payment modal"'),
+        'accessible aria-label rendered in modal template');
+
+      // Unlicensed play → modal opens, audio stays blocked
+      fb.play();
+      await sleep(20);
+      expectEqual(c.stub('.overlay').hidden, false, 'paywall opened the modal');
+      expectEqual(fb.isPlaying, false, 'audio never started without license');
+
+      // (a) × button closes the modal
+      for (const fn of closeBtn.handlers.click || []) fn();
+      await sleep(10);
+      expectEqual(c.stub('.overlay').hidden, true, '× button closed the modal');
+
+      // (b) ESC key closes the modal
+      fb.openPro();
+      await sleep(20);
+      expectEqual(c.stub('.overlay').hidden, false, 'modal reopened via openPro');
+      const escFn = (env.doc.listeners.keydown || []).at(-1);
+      expectTrue(!!escFn, 'ESC keydown listener registered');
+      escFn({ key: 'Escape' });
+      await sleep(10);
+      expectEqual(c.stub('.overlay').hidden, true, 'ESC closed the modal');
+
+      // (c) Backdrop (overlay) click closes the modal
+      fb.openPro();
+      await sleep(20);
+      const ov = c.stub('.overlay');
+      for (const fn of (ov.handlers.click || [])) fn({ target: ov });
+      await sleep(10);
+      expectEqual(ov.hidden, true, 'backdrop click closed the modal');
+
+      // Locked logic kept: after closing, a play attempt reopens the modal
+      // and still never creates audio.
+      fb.play();
+      await sleep(20);
+      expectEqual(fb.isPlaying, false, 'audio stays blocked after close');
+      expectEqual(c.stub('.overlay').hidden, false, 'modal reopens on play attempt');
+      expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext created');
+    } finally { env.restore(); }
+  });
 }
 console.log(`
 ${C.b}${C.B}FocusBot Automated Test Suite${C.x}

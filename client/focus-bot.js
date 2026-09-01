@@ -1093,9 +1093,14 @@
   /* ---- Overlay / Modal ---- */
   '.overlay{position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;' +
     '-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}' +
-  '.modal{width:min(96vw,340px);max-width:340px;background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
+  '.modal{position:relative;width:min(96vw,340px);max-width:340px;background:rgba(30,32,40,.88);border:1px solid rgba(255,255,255,.12);border-radius:22px;' +
     'padding:22px 20px;text-align:center;color:#ebebf5;box-shadow:0 24px 80px rgba(0,0,0,.55);' +
     'animation:fb-pop .34s cubic-bezier(.32,1.35,.5,1)}' +
+  '.modal-close{position:absolute;top:12px;right:12px;width:28px;height:28px;border-radius:50%;border:0;cursor:pointer;' +
+    'display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;color:#98989f;' +
+    'background:rgba(120,120,128,.24);transition:background .18s,color .18s,transform .18s ease}' +
+  '.modal-close:hover{color:#fff;background:rgba(120,120,128,.44);transform:scale(1.08)}' +
+  '.modal-close:active{transform:scale(.94)}' +
   '.modal h3{font-size:15.5px;font-weight:600;margin-bottom:8px}' +
   '.modal p{font-size:12.5px;color:#98989f;line-height:1.6;margin-bottom:14px}' +
   '.btc-box{background:rgba(247,147,26,.08);border:1px solid rgba(247,147,26,.35);border-radius:14px;padding:12px;margin-bottom:12px}' +
@@ -1215,6 +1220,7 @@
 
 '<div id="fb-overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="fb-m-title">' +
   '<div class="modal">' +
+    '<button type="button" class="modal-close" aria-label="Close payment modal" title="Close">&times;</button>' +
     '<h3 id="fb-m-title">License Required</h3>' +
     '<p>FocusBot requires an active license to operate.<br>' +
        'Complete a <strong>12 &euro; Bitcoin payment</strong> for 365 days of access.</p>' +
@@ -1274,6 +1280,7 @@
     ambRow: $('.amb-row'),
 
     overlay: $('.overlay'),
+    closeModal: $('.modal-close'),
     btcBox: $('#fb-btc-box'), btcPrice: $('.btc-price'),
     btcAddr: $('#fb-btc-address') || $('.btc-addr'),
     btcQr: $('#fb-btc-qr'), btcCopy: $('#fb-copy-btn'),
@@ -1414,8 +1421,18 @@
   if (els.buy) els.buy.addEventListener('click', buyPro);
   if (els.btcCopy) els.btcCopy.addEventListener('click', copyBtcAddress);
   if (els.activate) els.activate.addEventListener('click', onActivateClick);
+  if (els.closeModal) els.closeModal.addEventListener('click', closeUpsell);
   if (els.overlay) {
     els.overlay.addEventListener('click', (e) => { if (e.target === els.overlay) closeUpsell(); });
+  }
+
+  // ESC key closes the payment modal (keyboard accessibility)
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('keydown', (e) => {
+      try {
+        if (e && (e.key === 'Escape' || e.key === 'Esc')) closeUpsell();
+      } catch (_) { /* non-fatal */ }
+    });
   }
 
   if (els.pomoStart) {
