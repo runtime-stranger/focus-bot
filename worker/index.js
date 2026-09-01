@@ -49,6 +49,15 @@ const KEY_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 /** Bitcoin TXID: 64 hexadecimal characters */
 const TXID_RE = /^[0-9a-f]{64}$/;
 
+/**
+ * Master test license key — bypasses on-chain TXID verification and the
+ * replay guard. Hot value for development/testing only: it grants an
+ * instant 365-day Pro license wherever it is entered. Deliberately kept
+ * ONLY in the Worker (never shipped inside client/focus-bot.js), so the
+ * client simply talks to the standard verify endpoints like normal keys.
+ */
+const MASTER_DEV_KEY = 'FOCUS-PRO-4YF4SA5M';
+
 /* --- PRICING --- */
 const PRICE_EUR = 12;
 const SATS_PER_BTC = 100_000_000;
@@ -219,6 +228,9 @@ async function handleVerifyLicense(request, env, ctx, cors) {
   const key = String(body.apiKey || body.licenseKey || '').trim().toUpperCase();
   const domain = normalizeDomain(body.domain || urlHost(request));
 
+  // Master test key → instant 365-day Pro license, no KV lookup, no replay lock
+  if (isMasterKey(key)) return await issueMasterLicense(env, domain, cors);
+
   if (!key)    return json({ valid: false, reason: 'missing_key' }, 400, cors);
   if (!domain) return json({ valid: false, reason: 'missing_domain' }, 400, cors);
 
@@ -315,6 +327,34 @@ async function buildEngineToken(env) {
   return body + '.' + sig;
 }
 
+/** Case-insensitive equality test against the master key. */
+function isMasterKey(v) {
+  return safeEqual(String(v || '').trim().toUpperCase(), MASTER_DEV_KEY);
+}
+
+/**
+ * Master-key bypass response: instant 365-day full Pro license + signed
+ * engine token. Deliberately stateless — writes NOTHING to KV and takes
+ * no replay lock, so the same key can be used from any number of
+ * devices/browsers without a single on-chain lookup.
+ */
+async function issueMasterLicense(env, domain, cors) {
+  const now = Date.now();
+  const expiresAt = now + 365 * 86400000;
+  return json({
+    ok: true,
+    valid: true,
+    tier: 'pro',
+    plan: 'pro',
+    key: MASTER_DEV_KEY,
+    licenseKey: MASTER_DEV_KEY,
+    domain: domain || '*',
+    expiresAt,
+    expires_at: expiresAt,
+    engine: await buildEngineToken(env),
+  }, 200, cors);
+}
+
 /* ==========================================================================
  * 3) POST /api/verify-tx — AUTOMATIC ON-CHAIN TXID VERIFICATION
  *    Body : { txid, domain }
@@ -337,8 +377,13 @@ async function buildEngineToken(env) {
 async function handleVerifyTx(request, env, cors) {
   const body = await readJson(request);
 
-  const txid = String(body.txid || '').trim().toLowerCase();
+  const rawInput = String(body.key || body.txid || '').trim();
+  const txid = rawInput.toLowerCase();
   const domain = normalizeDomain(body.domain || urlHost(request));
+
+  // Master test key entered into the "TXID" field also bypasses everything:
+  // no 64-hex check, no mempool lookup, no replay lock.
+  if (isMasterKey(rawInput)) return await issueMasterLicense(env, domain, cors);
 
   if (!TXID_RE.test(txid)) return json({ ok: false, error: 'bad_txid', message: 'Invalid transaction ID (TXID) format' }, 400, cors);
   if (!domain)             return json({ ok: false, error: 'missing_domain' }, 400, cors);

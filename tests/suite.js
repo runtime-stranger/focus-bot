@@ -1017,6 +1017,51 @@ async function workerEdgeCaseScenarios() {
     await ctx4.drain();
     expectEqual(r4.status, 409, 'SIMULATED_TXID replay → 409');
   });
+
+    /* ---- SCENARIO 57 ---- */
+    await scenario('57. Master test key FOCUS-PRO-4YF4SA5M: instant 365d Pro, no on-chain, no replay lock', async () => {
+      const kv = new KVMock();
+      const env = makeEnv(kv);
+      const MASTER = 'FOCUS-PRO-4YF4SA5M';
+      const day = 86400000;
+
+      // a) /api/verify-license → master key grants an instant 365-day Pro license
+      const r1 = await postJSON(env, '/api/verify-license', { apiKey: MASTER, domain: 'test.dev' });
+      expectEqual(r1.status, 200, 'verify-license → 200');
+      const b1 = await r1.json();
+      expectEqual(b1.valid, true, 'valid:true');
+      expectEqual(b1.tier, 'pro', 'tier:pro');
+      expectEqual(b1.plan, 'pro', 'plan:pro');
+      expectEqual(b1.licenseKey, MASTER, 'master key echoed as licenseKey');
+      expectTrue(b1.expiresAt > Date.now() && b1.expiresAt < Date.now() + 366 * day, 'expiresAt ≈ now + 365 days');
+      expectEqual(b1.expires_at, b1.expiresAt, 'expires_at alias matches expiresAt');
+      expectTrue(!!b1.engine && b1.engine.includes('.'), 'HMAC-signed engine token present');
+
+      // b) Deliberately stateless: zero KV writes → no replay lock, unlimited reuse
+      expectEqual(kv.puts.length, 0, 'master activation writes nothing to KV');
+      const r2 = await postJSON(env, '/api/verify-license', { apiKey: 'focus-pro-4yf4sa5m', domain: 'other.dev' });
+      expectEqual(r2.status, 200, 'reuse (case-insensitive, second device/domain) → 200, no replay guard');
+      expectEqual((await r2.json()).valid, true, 'second activation still valid');
+
+      // c) /api/verify-tx accepts the master key in the txid field (bypasses 64-hex + mempool)
+      const r3 = await postJSON(env, '/api/verify-tx', { txid: MASTER, domain: 'test.dev' });
+      expectEqual(r3.status, 200, 'verify-tx with master key → 200 (hex check bypassed)');
+      const b3 = await r3.json();
+      expectEqual(b3.valid, true, 'verify-tx master → valid');
+      expectEqual(b3.licenseKey, MASTER, 'verify-tx master → key returned');
+      expectEqual(kv.puts.length, 0, 'verify-tx master path also writes nothing to KV');
+      expectTrue(!!b3.engine && b3.engine.includes('.'), 'engine token also issued via verify-tx');
+
+      // d) Signed engine token payload integrity (version + frequency matrix)
+      const payload = JSON.parse(Buffer.from(b1.engine.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+      expectEqual(payload.v, 1, 'engine payload version');
+      expectTrue(!!payload.mods && !!payload.mods.beta && !!payload.mods.gamma, 'frequency matrix carries mods');
+
+      // e) Ordinary keys are completely unaffected by the bypass
+      const r4 = await postJSON(env, '/api/verify-license', { apiKey: 'FOCUS-PRO-NOPE123', domain: 'test.dev' });
+      expectEqual(r4.status, 403, 'unknown non-master key still 403');
+      expectEqual((await r4.json()).reason, 'unknown_key', 'unknown_key reason preserved');
+    });
 }
 
 /* ===========================================================================
@@ -2450,6 +2495,48 @@ async function webstoreComplianceScenarios() {
       expectEqual(fb.isPlaying, false, 'audio stays blocked after close');
       expectEqual(c.stub('.overlay').hidden, false, 'modal reopens on play attempt');
       expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext created');
+    } finally { env.restore(); }
+  });
+
+  /* ---- SCENARIO 58 ---- */
+  await scenario('58. Master key E2E: FOCUS-PRO-4YF4SA5M in the modal activates Pro & unlocks audio', async () => {
+    const env = installClientEnv();
+    // Route the widget's API traffic through the REAL worker (verify-license,
+    // verify-tx, get-btc-rate), everything else is an unexpected network call.
+    const kv = new KVMock();
+    const wEnv = makeEnv(kv);
+    Object.defineProperty(env.G, 'fetch', {
+      value: async (url, opts) => {
+        const u = String(url);
+        if (!/\/api\/(verify-license|verify-tx|get-btc-rate)/.test(u)) throw new Error('unexpected fetch: ' + u);
+        const ctx = makeCtx();
+        const res = await worker.fetch(new Request(u, opts), wEnv, ctx);
+        await ctx.drain();
+        return res;
+      },
+      writable: true, configurable: true,
+    });
+    try {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      expectEqual(fb.isPro, false, 'starts unlicensed');
+      expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext before activation');
+
+      // Type the master key into the modal input and press Verify & Activate
+      c.stub('#fb-license-input').value = 'FOCUS-PRO-4YF4SA5M';
+      for (const fn of (c.stub('#fb-activate-btn').handlers.click || [])) fn();
+
+      await waitFor(() => fb.isPro === true, 3000, 'master key activates Pro');
+      expectEqual(env.ls.getItem('focusbot.licenseKey'), 'FOCUS-PRO-4YF4SA5M', 'master key persisted as active license');
+      expectEqual(MockAudioContext.instances.length, 0, 'still no AudioContext until play is requested');
+
+      // Licensed user can now start the full audio graph (proves terminal unlock)
+      fb.play();
+      await waitFor(() => fb.isPlaying === true, 3000, 'play starts after master activation');
+      expectEqual(MockAudioContext.instances.length, 1, 'exactly one AudioContext created');
+      expectTrue(MockAudioContext.oscs.length >= 2, 'binaural oscillator pair created');
+      expectEqual(kv.puts.length, 0, 'master flow never touched KV (no replay record)');
     } finally { env.restore(); }
   });
 }
