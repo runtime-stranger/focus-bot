@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy — FocusBot</title>
+  <meta name="description" content="FocusBot privacy policy: zero data collection, offline-first, local-only storage, and a privacy-focused Bitcoin payment model." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a0f; --surface: #12121a; --border: #1e1e2a;
+      --text: #e8e8ed; --muted: #6b6b7b; --accent: #38bdf8;
+    }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.7;
+      padding: 40px 20px 80px; max-width: 760px; margin: 0 auto;
+    }
+    body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-image: linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px); background-size: 60px 60px; }
+    a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+    .back { font-size: 13px; color: var(--muted); margin-bottom: 20px; display: inline-block; }
+    h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 6px; }
+    .effective { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
+    h2 { font-size: 18px; font-weight: 700; margin: 30px 0 10px; color: var(--accent); }
+    p, li { font-size: 14.5px; color: #c9c9d4; margin-bottom: 10px; }
+    ul { padding-left: 22px; margin-bottom: 14px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-top: 8px; }
+    .note { margin-top: 24px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 18px; }
+    code { background: rgba(56,189,248,.1); padding: 1px 6px; border-radius: 5px; font-size: 13px; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← Back to FocusBot</a>
+  <h1>FocusBot Privacy Policy</h1>
+  <p class="effective">Effective date: September 1, 2026 &middot; Last updated: September 2026 &middot; FocusBot v1.3.0</p>
+
+  <p>Thank you for using FocusBot — the Autonomous Deep Work Suite. Your privacy is fundamental to how this extension is built. This policy is short because we have almost nothing to say about your data: <strong>we do not collect it.</strong></p>
+
+  <div class="card">
+    <h2>1. Data Collection</h2>
+    <p>Not a single byte of personal data is collected, sold, or shared with third parties. FocusBot does not collect, store, or transmit any personal information, browsing history, IP address, or user analytics. This is a <strong>Zero-Telemetry, 100% Offline-First</strong> extension.</p>
+  </div>
+
+  <div class="card">
+    <h2>2. Permissions We Request</h2>
+    <p>FocusBot requests only the minimal permissions required to function:</p>
+    <ul>
+      <li><strong><code>storage</code></strong> — to persist your sound preferences, Pomodoro timer state, trial window, and license key entirely within your local browser via <code>chrome.storage.local</code>.</li>
+      <li><strong><code>audio</code></strong> (Web Audio API) — to synthesize sound in real time on your device. No audio is ever recorded or uploaded.</li>
+    </ul>
+    <p>We do not request access to your browsing history, tabs, bookmarks, camera, microphone, or location.</p>
+  </div>
+
+  <div class="card">
+    <h2>3. External Servers</h2>
+    <p>No data is ever sent to any remote server for tracking purposes. All sound is generated locally with the Web Audio API. The only outbound request FocusBot makes is an <strong>anonymous Bitcoin transaction (TXID) verification</strong> against a Cloudflare Worker when you activate a license — the TXID is already public on the Bitcoin blockchain and contains no personal information.</p>
+  </div>
+
+  <div class="card">
+    <h2>4. Local-Only Storage</h2>
+    <p>All state — your saved frequency preferences, Pomodoro progress, custom settings, trial start timestamp, and license state — is stored entirely in your local browser. This data never leaves your device, and removing the extension permanently deletes it.</p>
+  </div>
+
+  <div class="card">
+    <h2>5. Single Purpose</h2>
+    <p>FocusBot serves a single purpose: synthesizing neural/ambient sound and running a privacy-friendly focus timer. It contains no advertising, no analytics SDKs, no crash reporting, and no third-party trackers of any kind.</p>
+  </div>
+
+  <div class="card">
+    <h2>6. Bitcoin Payment Model</h2>
+    <p>To maximize your privacy, FocusBot <strong>exclusively accepts Bitcoin</strong> for its one-time lifetime license. No credit card details, billing addresses, or personal financial data are ever requested, processed, or stored.</p>
+    <p><em>(Payment Note: To maximize user privacy and prevent unauthorized recurring card charges, FocusBot exclusively accepts Bitcoin for lifetime licenses. No credit card details, billing addresses, or personal financial data are ever requested, processed, or stored.)</em></p>
+  </div>
+
+  <p class="note">If you have any questions about this privacy policy, please open an issue on the project repository. This policy may be updated from time to time; any changes will be reflected here with a new effective date.</p>
+</body>
+</html>

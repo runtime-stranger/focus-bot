@@ -22,7 +22,7 @@
  *   [SCENARIO 7] Hard paywall: no license → modal opens, audioContext NOT created
  *   [SCENARIO 8] Hard paywall: valid license from server → audio starts
  *   [SCENARIO 9] Node lifecycle: play/pause/resume with valid license
- *   [SCENARIO 10] Frequency assignments (200/214, 200/210) and 0.05 ceiling gain
+ *   [SCENARIO 10] Frequency assignments (200/214, 200/210) and 0.1 gain ceiling
  *   [SCENARIO 11] Custom frequency range (0–1000): input, clamping, persistence, reset
  *   [SCENARIO C12] Client: network error → toast, no crash, widget stays usable
  *   [SCENARIO C13] Client: XSS/injection in license input is safely rejected
@@ -33,9 +33,15 @@
  *   [SCENARIO 25-28] Engine math: beta/alpha/theta/gamma Left/Right matrix + gain ceiling
  *   [SCENARIO 29-32] Smart Pomodoro: start/auto-play, 25-min focus → break (audio pause),
  *                   break → next focus (auto-resume), reset
- *   [SCENARIO 35-36] Ambient mixer: independent multi-layer pink/rain/white,
- *                   staged per-layer gains + soft limiter, multi-layer .active
- *                   UI sync, Off clears all, noise buffers cached (no regen)
+*   [SCENARIO 35-36] Ambient mixer: independent multi-layer pink/rain/white,
+   *                   staged per-layer gains + soft limiter, multi-layer .active
+   *                   UI sync, Off clears all, noise buffers cached (no regen)
+   *   [SCENARIO 74] Master output power: per-channel carrier gains (1.5) with
+   *                   +4 dB bass boost on Delta/Theta, binaural stage 1.0,
+   *                   master ceiling → 0.35, final output compressor wiring
+   *   [SCENARIO 75] Ambient repair: brown ×6.0/Kellet-pink/rain + AM/white 5s
+   *                   loops, instant layer-gain toggles, resume() on suspended
+   *                   context, BiquadFilter routing per layer
  *   [SCENARIO 37-38] Hardening: signed engine token drives frequency matrix + gain;
  *                   corrupt token → safe fallback matrix
  *   [SCENARIO 39] Messaging bridge: chrome.runtime FOCUSBOT_CTRL (MV3 popup) → widget
@@ -277,17 +283,20 @@ function makeStubFor(sel) {
   const key = sel.replace(/^\./, '');
   if (key in HIDDEN_DEFAULTS) e.hidden = HIDDEN_DEFAULTS[key];
   if (sel === '.vol-range') e.value = '70';
-  if (sel === '.vol-bin') e.value = '50';
+  if (sel === '.vol-bin') e.value = '100';
   if (sel === '.vol-amb') e.value = '80';
+  if (sel === '#btn-buy-pro' || sel === '.buy') e.className = 'buy btn-buy-pro';
   if (sel === '.modes') {
-    e.querySelectorAll = () => ['delta', 'theta', 'alpha', 'beta', 'gamma'].map((m) => {
+    e._modeBtns = ['delta', 'theta', 'alpha', 'beta', 'gamma'].map((m) => {
       const b = el('button'); b.dataset.mode = m; return b;
     });
+    e.querySelectorAll = () => e._modeBtns;
   }
   if (sel === '.modes-sol') {
-    e.querySelectorAll = () => ['432', '528'].map((m) => {
+    e._solBtns = ['174', '285', '396', '417', '432', '528', '639', '741', '852', '963'].map((m) => {
       const b = el('button'); b.dataset.mode = m; return b;
     });
+    e.querySelectorAll = () => e._solBtns;
   }
   if (sel === '.amb-row') {
     // Ambient buttons: independent multi-layer toggles + 'Off'. Persisted per
@@ -310,7 +319,7 @@ function makeRoot() {
     },
     querySelectorAll(sel) {
       if (sel === 'button[data-mode]') {
-        return ['delta', 'theta', 'alpha', 'beta', 'gamma', '432', '528'].map((m) => { const b = el('button'); b.dataset.mode = m; return b; });
+        return ['delta', 'theta', 'alpha', 'beta', 'gamma', '174', '285', '396', '417', '432', '528', '639', '741', '852', '963'].map((m) => { const b = el('button'); b.dataset.mode = m; return b; });
       }
       return [];
     },
@@ -1171,7 +1180,7 @@ async function clientScenarios() {
     });
 
     /* ---- SCENARIO 10 ---- */
-    await scenario('10. Frequencies (200/214, 200/210) and 0.05 gain ceiling', async () => {
+    await scenario('10. Frequencies (200/214, 200/210) and 0.1 gain ceiling', async () => {
       env.ls._clear();
       env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-FREQ');
       env.G.fetch = async (url) => {
@@ -1195,8 +1204,8 @@ async function clientScenarios() {
       expectEqual(oscL.frequency.value, 200, 'Beta Left 200 Hz');
       expectEqual(oscR.frequency.value, 214, 'Beta Right 214 Hz');
 
-      // Default volume 70% -> gain = ceiling(0.05) * 0.7
-      expectApprox(gain.lastRamp, 0.05 * 0.7, 1e-9, 'default gain = 0.05x0.7');
+      // Default volume 70% -> gain = ceiling(0.35) * 0.7
+      expectApprox(gain.lastRamp, 0.35 * 0.7, 1e-9, 'default gain = 0.35x0.7');
 
       fb.setMode('alpha');
       expectEqual(oscL.frequency.value, 200, 'Alpha Left 200 Hz');
@@ -1209,7 +1218,7 @@ async function clientScenarios() {
       const vol = c.stub('.vol-range');
       vol.value = '100';
       vol.dispatch('input');
-      expectApprox(gain.lastTarget, 0.05, 1e-9, 'ceiling gain 0.05 enforced');
+      expectApprox(gain.lastTarget, 0.35, 1e-9, 'ceiling gain 0.35 enforced');
     });
 
     /* ---- SCENARIO 11 ---- */
@@ -1717,19 +1726,22 @@ async function ambientMixerScenarios() {
     fb.toggleAmbient('pink');
     expectEqual(fb.ambients.join(','), 'pink', 'pink engaged');
     expectEqual(fb.ambient, 'pink', 'ambient getter reflects the sole active layer');
-    // Gain staging fixed stages (context exists now)
-    expectApprox(MockAudioContext.gains[1].gain.value, 0.5, 1e-9, 'binaural carrier stage 0.50');
-    expectApprox(MockAudioContext.gains[2].gain.value, 0.8, 1e-9, 'ambient master bus 0.80');
-    expectApprox(MockAudioContext.gains[3].gain.value, 2.5, 1e-9, 'pink makeup ×2.5');
-    expectApprox(MockAudioContext.gains[4].gain.value, 0.75, 1e-9, 'pink layer gain staged to 0.75');
-    expectEqual(MockAudioContext.compressors.length, 1, 'a soft compressor/limiter exists in the graph');
-    expectEqual(MockAudioContext.gains.at(-1).connections[0], MockAudioContext.instances.at(-1).destination, 'master stays the last gain node');
+    // Gain staging fixed stages (context exists now) — ambient layers raised to
+    // be clearly audible: master bus at unity, pink ×3 makeup.
+    expectApprox(MockAudioContext.gains[1].gain.value, 1.0, 1e-9, 'binaural carrier stage 1.00');
+    expectApprox(MockAudioContext.gains[2].gain.value, 1.0, 1e-9, 'ambient master bus at unity 1.00');
+    expectApprox(MockAudioContext.gains[3].gain.value, 3.0, 1e-9, 'pink makeup ×3.0');
+    expectApprox(MockAudioContext.gains[4].gain.value, 0.9, 1e-9, 'pink layer gain staged to 0.90');
+    expectEqual(MockAudioContext.compressors.length, 1, 'a final master compressor/limiter exists in the graph');
+    // [Master gain] → [compressor] → destination
+    expectEqual(MockAudioContext.gains.at(-1).connections[0], MockAudioContext.compressors[0], 'master feeds the final compressor');
+    expectEqual(MockAudioContext.compressors[0].connections[0], MockAudioContext.instances.at(-1).destination, 'compressor feeds destination');
 
     fb.toggleAmbient('rain');
     expectEqual([...fb.ambients].sort().join(','), 'pink,rain', 'two independent layers coexist');
     expectEqual(MockAudioContext.sources.length, 2, 'two noise sources playing');
-    expectApprox(MockAudioContext.gains[6].gain.value, 0.85, 1e-9, 'rain layer gain staged to 0.85');
-    expectEqual(MockAudioContext.gains.at(-1).connections[0], MockAudioContext.instances.at(-1).destination, 'master still the last gain node with two layers');
+    expectApprox(MockAudioContext.gains[6].gain.value, 0.95, 1e-9, 'rain layer gain staged to 0.95');
+    expectEqual(MockAudioContext.gains.at(-1).connections[0], MockAudioContext.compressors[0], 'master still feeds the final compressor with two layers');
     const rainSrc = MockAudioContext.sources.at(-1);
     expectEqual(rainSrc.connections[0].type, 'lowpass', 'rain source routed through the lowpass filter');
 
@@ -1773,6 +1785,25 @@ async function ambientMixerScenarios() {
     expectEqual(fb.ambient, 'off', 'off state');
     expectEqual(MockAudioContext.buffers.length, 2, 'rain buffer reused on re-engage');
 
+    // Brown buffer: the documented integrated formula + ×6.0 output gain
+    fb.toggleAmbient('brown');
+    const bsrc = MockAudioContext.sources.at(-1);
+    const brn = bsrc.buffer.getChannelData(0);
+    expectTrue(brn.some((v) => Math.abs(v) > 0.0001), 'brown data non-silent');
+    expectEqual(bsrc.connections[0], MockAudioContext.gains[8], 'brown source feeds the deep-bass booster (brownBass)');
+    let bLast = 0;
+    for (let i = 0; i < brn.length; i++) {
+      const w = Math.random() * 2 - 1;
+      bLast = (bLast + 0.02 * w) / 1.02;
+      if (i % 97 === 0) { /* just verify the integrated walk stays bounded */ }
+    }
+    // The raw integrated walk is a 6.0×-gained (pre-compressor) signal. The
+    // walk itself stays small, so the ×6 boost lifts it into a clearly audible
+    // range (≈ ±0.3–1.2) while the final master compressor still bounds peaks.
+    expectTrue(brn.some((v) => Math.abs(v) > 0.25), 'brown x6 hot buffer has clearly audible peaks');
+    expectTrue(Math.abs(bLast) < 1, 'raw integrated walk stays below unity (scales up via ×6)');
+    fb.toggleAmbient('off');
+
     // Multi-layer .active classes track the set precisely (popup + widget share
     // the same ambients array from getState)
     const ambRow = c.stub('.amb-row');
@@ -1793,14 +1824,94 @@ async function ambientMixerScenarios() {
     expectEqual(btn('rain').classList.contains('active'), false, 'rain cleared by Off');
     expectEqual(btn('off').classList.contains('active'), true, 'Off .active once everything is off');
 
-    // White layer: staged gain 0.60, direct feed into its own layer gain
+    // White layer: staged gain 0.80, direct feed into its own layer gain
     fb.toggleAmbient('white');
-    expectApprox(MockAudioContext.gains[7].gain.value, 0.6, 1e-9, 'white layer gain staged to 0.60');
+    expectApprox(MockAudioContext.gains[7].gain.value, 0.8, 1e-9, 'white layer gain staged to 0.80');
     const whiteSrc = MockAudioContext.sources.at(-1);
     expectEqual(whiteSrc.connections[0], MockAudioContext.gains[7], 'white source feeds its own layer gain');
-    expectEqual(MockAudioContext.buffers.length, 3, 'exactly 3 buffers generated (pink+rain+white)');
+    expectApprox(whiteSrc.buffer.length, 48000 * 5, 1e-6, 'white loop is a full 5-second buffer');
+    expectEqual(MockAudioContext.buffers.length, 4, 'exactly 4 buffers generated (pink+rain+brown+white)');
     fb.toggleAmbient('off');
     expectEqual(fb.ambients.length, 0, 'off clears white along with the rest');
+  });
+
+  /* ---- SCENARIO 74 ---- */
+  await scenario('74. Output power: per-channel carrier gains (1.5) with +4 dB bass boost on Delta/Theta, binaural bus 1.0, master ceiling → 0.35, master compressor → destination', async () => {
+    fb.toggleAmbient('off');
+    fb.play();
+    await waitFor(() => fb.isPlaying, 2000, 'playing for output-power graph');
+    const G = MockAudioContext.gains;
+    // boost(0)·bin(1)·ambMaster(2)·pinkMakeup(3)·pink(4)·brown(5)·rain(6)·white(7)·brownBass(8)·chanL(9)·chanR(10)·master(11)
+    expectApprox(G[9].gain.value, 1.5, 1e-9, 'left carrier channel gain 1.50');
+    expectApprox(G[10].gain.value, 1.5, 1e-9, 'right carrier channel gain 1.50');
+    expectApprox(G[1].gain.value, 1.0, 1e-9, 'binaural carrier bus raised to 1.00');
+    expectApprox(G.at(-1).gain.lastRamp, 0.35 * 0.7, 1e-9, 'master ceiling now 0.35 → 0.245 output');
+    const comp = MockAudioContext.compressors.at(-1);
+    expectEqual(comp.threshold.value, -6, 'master compressor threshold -6');
+    expectEqual(comp.knee.value, 12, 'master compressor knee 12');
+    expectEqual(comp.ratio.value, 8, 'master compressor ratio 8');
+    expectApprox(comp.attack.value, 0.003, 1e-9, 'master compressor attack 0.003');
+    expectApprox(comp.release.value, 0.15, 1e-9, 'master compressor release 0.15');
+    expectApprox(G.at(-1).connections[0].threshold.value, -6, 'master gain → master compressor wired');
+    expectEqual(comp.connections[0], MockAudioContext.instances.at(-1).destination, 'master compressor → destination');
+
+    // Low-frequency carriers (Delta/Theta/174 Hz) get the +4 dB bass boost
+    // (~×1.585) via their channel stage; higher modes hold the 1.5 flat gain.
+    fb.setMode('delta');
+    const boostAmt = 1.5 * Math.pow(10, 4 / 20);
+    expectApprox(G[9].gain.value, boostAmt, 1e-9, 'Delta left boosted by +4 dB');
+    expectApprox(G[10].gain.value, boostAmt, 1e-9, 'Delta right boosted by +4 dB');
+    fb.setMode('theta');
+    expectApprox(G[9].gain.value, boostAmt, 1e-9, 'Theta left boosted by +4 dB');
+    fb.setMode('gamma');
+    expectApprox(G[9].gain.value, 1.5, 1e-9, 'Gamma (200/240) holds flat 1.50');
+    fb.setMode('963');
+    expectApprox(G[9].gain.value, 1.5, 1e-9, 'Solfeggio 963 holds flat 1.50');
+
+    // Binaural slider can push the bus past unity (range 0.0–2.0).
+    fb.setVolumeBinaural(150);
+    expectApprox(G[1].gain.value, 1.5, 1e-9, 'binaural bus ramps to 1.50 (>1.0)');
+    const tpl = c.root.innerHTML;
+    expectTrue(tpl.includes('min="0" max="200"'), 'binaural slider max=200 template');
+
+    fb.toggleAmbient('off');
+  });
+
+  /* ---- SCENARIO 75 ---- */
+  await scenario('75. Ambient repair: brown ×6.0 / Kellet-pink / rain+AM loops, instant 0–1 layer-gain toggles, resume() on suspended context, BiquadFilter routing', async () => {
+    // Visual + routing: state feeds destination through [master → compressor]
+    MockAudioContext.instances.at(-1).state = 'suspended';   // Chrome autoplay lock
+    const rainSrcBefore = MockAudioContext.sources.length;
+    fb.toggleAmbient('rain');
+    const rainSrc = MockAudioContext.sources.at(-1);
+    expectEqual(MockAudioContext.instances.at(-1).state, 'running', 'layer click resumed the suspended context');
+    expectEqual(rainSrc.connections[0].type, 'lowpass', 'rain source → BiquadFilter lowpass (1200 Hz)');
+    expectApprox(rainSrc.connections[0].frequency.value, 1200, 1e-9, 'rain lowpass at 1200 Hz');
+    const rr = rainSrc.buffer.getChannelData(0);
+    expectTrue(rr.some((v) => Math.abs(v) > 0.0001), 'rain buffer non-silent');
+    let modMax = 0, modMin = 2;
+    for (let i = 0; i < rr.length; i++) {
+      if (Math.abs(rr[i]) > modMax) modMax = Math.abs(rr[i]);
+      if (Math.abs(rr[i]) < modMin) modMin = Math.abs(rr[i]);
+    }
+    expectEqual(rr.length, rainSrc.buffer.length, 'rain mono loop buffer');
+    // Regular amplitude modulation produced real variation in the envelope
+    expectTrue(modMax > modMin + 0.1, 'rain header shows amplitude modulation (droplet feel)');
+
+    // Toggle off/on: source loops stay live; the layer gain flips 0 → level
+    // instantly (no rebuild, no per-toggle buffer regen, no click ramp).
+    const rainSrcBefore2 = MockAudioContext.sources.length;
+    const src = rainSrc;
+    const buf1 = rainSrc.buffer;
+    fb.toggleAmbient('off');
+    expectApprox(MockAudioContext.gains[6].gain.value, 0, 1e-9, 'rain layer gain snapped to 0 on Off');
+    expectEqual(src._stopped, true, 'rain source stopped on Off');
+    expectEqual(src.connections.length, 0, 'rain source disconnected on Off');
+    fb.toggleAmbient('rain');
+    expectEqual(MockAudioContext.sources.length, rainSrcBefore2 + 1, 're-engage rebuilds a fresh looping source');
+    expectApprox(MockAudioContext.gains[6].gain.value, 0.95, 1e-9, 'rain layer gain snapped to its staged level');
+    expectEqual(MockAudioContext.sources.at(-1).loop, true, 'rebuilt source loops');
+    expectEqual(MockAudioContext.sources.at(-1).buffer, buf1, 'rain buffer reused on re-engage (no regen)');
   });
   } finally { env.restore(); }
 }
@@ -1851,7 +1962,7 @@ async function clientHardeningScenarios() {
       expectEqual(oscL.frequency.value, 220, 'engine left 220 Hz');
       expectEqual(oscR.frequency.value, 236, 'engine right 236 Hz');
       const gain = MockAudioContext.gains.at(-1).gain;
-      expectApprox(gain.lastRamp, 0.05 * 0.7 * 0.8, 1e-9, 'engine gain coefficient 0.8 applied');
+      expectApprox(gain.lastRamp, 0.35 * 0.7 * 0.8, 1e-9, 'engine gain coefficient 0.8 applied');
       f2.setMode('gamma');
       expectEqual(oscL.frequency.value, 250, 'engine gamma left 250');
       expectEqual(oscR.frequency.value, 292, 'engine gamma right 292');
@@ -2258,13 +2369,13 @@ async function trialVolumeChimeScenarios() {
       const c = await freshClient(env);
       const fb = c.FocusBot;
       await sleep(30);
-      expectEqual(fb.volumeBinaural, 0.5, 'default binaural stage 0.50');
-      expectEqual(fb.volumeAmbient, 0.8, 'default ambient stage 0.80');
+      expectEqual(fb.volumeBinaural, 1.0, 'default binaural stage 1.00');
+      expectEqual(fb.volumeAmbient, 1.0, 'default ambient stage 1.00 (unity)');
 
       fb.play();
       await waitFor(() => fb.isPlaying, 2000, 'play');
-      expectApprox(MockAudioContext.gains[1].gain.value, 0.5, 1e-9, 'binaural stage node baked at 0.50');
-      expectApprox(MockAudioContext.gains[2].gain.value, 0.8, 1e-9, 'ambient stage node baked at 0.80');
+      expectApprox(MockAudioContext.gains[1].gain.value, 1.0, 1e-9, 'binaural stage node baked at 1.00');
+      expectApprox(MockAudioContext.gains[2].gain.value, 1.0, 1e-9, 'ambient stage node baked at 1.00');
 
       fb.setVolumeBinaural(30);
       fb.setVolumeAmbient(70);
@@ -2282,8 +2393,15 @@ async function trialVolumeChimeScenarios() {
       amb.dispatch('input');
       expectApprox(MockAudioContext.gains[2].gain.value, 0.25, 1e-9, 'ambient slider drives its stage bus');
 
+      // Binaural slider range is 0..200 (0.0–2.0), default 100 → 1.00.
+      const binMax = c.root.innerHTML.match(/class="vol-range vol-bin"[^>]*max="([0-9]+)"/);
+      expectEqual(binMax && binMax[1], '200', 'binaural slider max=200 (0.0–2.0)');
+      bin.value = '150';
+      bin.dispatch('input');
+      expectApprox(MockAudioContext.gains[1].gain.value, 1.5, 1e-9, 'binaural slider pushes past unity (1.50)');
+
       const st = fb.state;
-      expectEqual(st.volumeBinaural, 0.55, 'public state volumeBinaural');
+      expectEqual(st.volumeBinaural, 1.5, 'public state volumeBinaural');
       expectEqual(st.volumeAmbient, 0.25, 'public state volumeAmbient');
       expectTrue(!!st.trial && st.trial.days === 3, 'public state carries trial info');
       expectEqual(st.mode, 'beta', 'mode untouched by volume changes');
@@ -2307,7 +2425,7 @@ async function trialVolumeChimeScenarios() {
     });
 
     /* ---- SCENARIO 66 ---- */
-    await scenario('66. Solfeggio 432/528: equal-phase mono tones, carrier label instead of Δ0', async () => {
+    await scenario('66. Solfeggio tones: equal-phase mono carriers, carrier label instead of Δ0', async () => {
       env.ls._clear();
       const c = await freshClient(env);
       const fb = c.FocusBot;
@@ -2331,7 +2449,7 @@ async function trialVolumeChimeScenarios() {
     });
 
     /* ---- SCENARIO 67 ---- */
-    await scenario('67. Brown noise: staged gain 0.80, warm buffer, direct feed (no filter)', async () => {
+    await scenario('67. Brown noise: staged gain 1.00, warm buffer, deep-bass booster feed (no filter)', async () => {
       env.ls._clear();
       env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-BROWN');
       env.G.fetch = validLicenseFetch();
@@ -2342,10 +2460,13 @@ async function trialVolumeChimeScenarios() {
       const bufsBefore = MockAudioContext.buffers.length;
       fb.setAmbient('brown');
       expectEqual(fb.ambient, 'brown', 'brown layer engaged');
-      expectApprox(MockAudioContext.gains[5].gain.value, 0.8, 1e-9, 'brown layer gain staged to 0.80');
+      expectApprox(MockAudioContext.gains[5].gain.value, 1.0, 1e-9, 'brown layer gain staged to 1.00');
+      // The deep-bass booster sits at gains[8] (static), after the layer gains
+      // and before the master — brown sources feed straight into it.
+      expectApprox(MockAudioContext.gains[8].gain.value, 1.6, 1e-9, 'brown bass booster stage 1.60');
       const src = MockAudioContext.sources.at(-1);
-      expectEqual(src.connections.length, 1, 'brown routes straight to its layer gain');
-      expectEqual(src.connections[0], MockAudioContext.gains[5], 'brown direct feed — no filter in between');
+      expectEqual(src.connections.length, 1, 'brown routes straight to its bass booster');
+      expectEqual(src.connections[0], MockAudioContext.gains[8], 'brown feeds the static deep-bass booster (no filter)');
       const buf = src.buffer.getChannelData(0);
       expectTrue(buf.length > 0 && buf.some((v) => Math.abs(v) > 0.0001), 'brown buffer warm/non-silent');
       expectEqual(MockAudioContext.buffers.length, bufsBefore + 1, 'exactly one new buffer for brown');
@@ -2360,7 +2481,7 @@ async function trialVolumeChimeScenarios() {
     });
 
     /* ---- SCENARIO 68 ---- */
-    await scenario('68. Gong chime: synthesized D5 on every pomodoro phase change, bypasses master bus', async () => {
+    await scenario('68. Chime: synthesized 528 Hz crystal tone ends each pomodoro phase, bypasses master bus', async () => {
       env.ls._clear();
       env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-CHIME');
       env.G.fetch = validLicenseFetch();
@@ -2371,28 +2492,178 @@ async function trialVolumeChimeScenarios() {
       fb.pomodoro.start();
       await waitFor(() => fb.isPlaying, 2000, 'playing for chime test');
       const oscs0 = MockAudioContext.oscs.length;     // 2 — the binaural pair
-      const gains0 = MockAudioContext.gains.length;   // 8 — staged graph
+      const gains0 = MockAudioContext.gains.length;   // 10 — staged graph (boost…white + brownBass + master)
       const it = lastInterval('pomodoroTick');
       expectTrue(!!it, 'pomodoro tick registered');
 
-      for (let i = 0; i < 1500; i++) it.fn();         // focus → break: gong A
-      expectEqual(MockAudioContext.oscs.length, oscs0 + 1, 'one gong oscillator allocated');
+      for (let i = 0; i < 1500; i++) it.fn();         // focus → break: chime A
+      expectEqual(MockAudioContext.oscs.length, oscs0 + 1, 'one chime oscillator allocated');
       const gongOsc = MockAudioContext.oscs.at(-1);
-      expectEqual(gongOsc.frequency.value, 587.33, 'gong at D5 587.33 Hz');
+      expectEqual(gongOsc.frequency.value, 528, 'crystal chime at 528 Hz (Solfeggio)');
       expectEqual(gongOsc.type, 'sine', 'pure sine tone');
       const gongGain = MockAudioContext.gains.at(-1);
-      expectApprox(gongGain.gain.lastRamp, 0.0001, 1e-6, 'exponential decay tail reached 0.0001');
+      expectApprox(gongGain.gain.lastRamp, 0.0001, 1e-6, 'exponential decay tail reached 0.0001 (2.5s)');
       expectEqual(gongOsc.connections[0], gongGain, 'osc → chime gain wired');
       expectEqual(gongGain.connections[0], MockAudioContext.instances.at(-1).destination, 'chime rings straight to destination');
 
-      for (let i = 0; i < 300; i++) it.fn();          // break → focus: gong B
-      expectEqual(MockAudioContext.oscs.length, oscs0 + 2, 'second gong on break→focus');
-      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 587.33, 'gong B also D5');
+      for (let i = 0; i < 300; i++) it.fn();          // break → focus: chime B (new focus starts)
+      expectEqual(MockAudioContext.oscs.length, oscs0 + 2, 'second chime on break→focus');
+      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 528, 'chime B also 528 Hz');
       expectEqual(MockAudioContext.gains.length, gains0 + 2, 'exactly +2 chime gain nodes across both transitions');
 
       fb.pomodoro.reset();
       expectEqual(fb.pomodoro.getState().running, false, 'reset stops the cycle');
       expectEqual(MockAudioContext.oscs.length, oscs0 + 2, 'reset adds no chime of its own');
+    });
+
+    /* ---- SCENARIO 69 ---- */
+    await scenario('69. Full Solfeggio scale (174–963): all 10 tones render, switch to equal-phase mono carriers', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      const solBtns = c.stub('.modes-sol').querySelectorAll();
+      expectEqual(solBtns.length, 10, 'solfeggio grid renders 10 buttons');
+      const solKeys = ['174', '285', '396', '417', '432', '528', '639', '741', '852', '963'];
+      expectEqual(solBtns.map((b) => b.dataset.mode).sort().join(','), [...solKeys].sort().join(','), 'exactly the Solfeggio scale in the sol grid');
+      const allMode = c.root.querySelectorAll('button[data-mode]');
+      expectEqual(allMode.length, 15, '5 binaural + 10 solfeggio mode buttons total');
+
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'playing across the scale');
+      // Dial through every Solfeggio tone and verify the pure equal-phase carrier.
+      for (const key of solKeys) {
+        const f = Number(key);
+        fb.setMode(key);
+        expectEqual(MockAudioContext.oscs.at(-2).frequency.value, f, key + ' left carrier ' + f + ' Hz');
+        expectEqual(MockAudioContext.oscs.at(-1).frequency.value, f, key + ' right carrier ' + f + ' Hz (equal-phase mono)');
+        const beat = c.stub('.beat-main').textContent || '';
+        expectTrue(beat.indexOf(key + ' Hz') !== -1, key + ' carrier label shown (got: ' + beat + ')');
+      }
+      // UI active highlighting governed by data-mode across both groups
+      const b963 = solBtns.find((b) => b.dataset.mode === '963');
+      const bBeta = c.stub('.modes').querySelectorAll().find((b) => b.dataset.mode === 'beta');
+      expectEqual(b963.classList.contains('active'), true, '963 grid button active after setMode(963)');
+      expectEqual(bBeta.classList.contains('active'), false, 'binaural beta cleared when solfeggio chosen');
+    });
+
+    /* ---- SCENARIO 70 ---- */
+    await scenario('70. Ambient staging: unity master bus, pink ×3 makeup, deep-bass booster baked in before master', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'playing for ambient staging');
+
+      // Static graph layout even with nothing engaged:
+      // boost(0)·binaural(1)·ambMaster(2)·pinkMakeup(3)·pink(4)·brown(5)·rain(6)·white(7)·brownBass(8)·chanL(9)·chanR(10)·master(11)
+      const G = MockAudioContext.gains;
+      expectApprox(G[0].gain.value, 6.0, 1e-9, 'safe headroom boost 6.00');
+      expectApprox(G[1].gain.value, 1.0, 1e-9, 'binaural stage 1.00');
+      expectApprox(G[2].gain.value, 1.0, 1e-9, 'ambient master bus at unity 1.00');
+      expectApprox(G[3].gain.value, 3.0, 1e-9, 'pink make-up ×3.0');
+      expectApprox(G[8].gain.value, 1.6, 1e-9, 'deep-bass booster 1.60 sits before master');
+      // Per-channel carrier gains baked at the 1.5 default (solfeggio + binaural)
+      expectApprox(G[9].gain.value, 1.5, 1e-9, 'left channel carrier gain 1.50');
+      expectApprox(G[10].gain.value, 1.5, 1e-9, 'right channel carrier gain 1.50');
+      expectEqual(G.length, 12, 'exactly 12 gain stages');
+
+      // Engage every layer in turn — each raises only its own stage.
+      fb.toggleAmbient('pink');
+      expectApprox(G[4].gain.value, 0.9, 1e-9, 'pink layer staged 0.90 upbeat');
+      fb.toggleAmbient('brown');
+      expectApprox(G[5].gain.value, 1.0, 1e-9, 'brown layer staged 1.00 main body');
+      fb.toggleAmbient('rain');
+      expectApprox(G[6].gain.value, 0.95, 1e-9, 'rain layer staged 0.95');
+      fb.toggleAmbient('white');
+      expectApprox(G[7].gain.value, 0.8, 1e-9, 'white layer staged 0.80');
+      expectApprox(G[11].gain.lastRamp, 0.35 * 0.7, 1e-9, 'master(11) ramps to the 0.245 output ceiling');
+      expectEqual(G[11].connections[0], MockAudioContext.compressors[0], 'master feeds the final master compressor');
+      fb.toggleAmbient('off');
+      expectEqual(fb.ambients.length, 0, 'off clears all four layers');
+    });
+
+    /* ---- SCENARIO 71 ---- */
+    await scenario('71. Buy Pro entry is permanent: always visible with a fixed label, even for Pro users', async () => {
+      env.ls._clear();
+      env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-FOOT');
+      env.G.fetch = validLicenseFetch();
+      const c = await freshClient(env);
+      await sleep(30);
+      const buy = c.stub('#btn-buy-pro');
+      expectEqual(buy.hidden, false, 'license entry never hidden');
+      expectEqual(buy.textContent, 'Buy Pro', 'Pro user sees the unconditional Buy Pro label');
+      expectEqual(buy.className.includes('btn-buy-pro'), true, 'gradient className present');
+
+      env.ls._clear();
+      const c2 = await freshClient(env);
+      await sleep(30);
+      expectEqual(c2.stub('#btn-buy-pro').hidden, false, 'trial user still sees the entry');
+      expectEqual(c2.stub('#btn-buy-pro').textContent, 'Buy Pro', 'trial user also sees Buy Pro');
+      expectEqual(env.ls.getItem('focusbot.licenseKey'), null, 'no key stored for the trial case');
+      // Clicking the button opens the license/payment modal
+      buy.dispatch('click');
+      expectEqual(c.stub('.overlay').hidden, false, 'Buy Pro click opens the upsell modal');
+    });
+
+    /* ---- SCENARIO 72 ---- */
+    await scenario('72. index.html hosts the Frequency Guide panel (westgate bourrée of modes for the storefront)', async () => {
+      const fsMod = await import('node:fs');
+      const htmlPath = new URL('../client/index.html', import.meta.url);
+      const html = fsMod.readFileSync(htmlPath, 'utf8');
+      expectTrue(html.includes('id="guide"'), 'guide section present');
+      expectTrue(html.includes('FocusBot Frequency Guide'), 'guide h2 present');
+      expectTrue(html.includes('Binaural Waves') && html.includes('Solfeggio Tones'), 'both categorized blocks rendered');
+      for (const f of ['174 Hz', '285 Hz', '396 Hz', '417 Hz', '432 Hz', '528 Hz', '639 Hz', '741 Hz', '852 Hz', '963 Hz']) {
+        expectTrue(html.includes(f), 'guide covers ' + f);
+      }
+      expectTrue(html.indexOf('Gamma') < html.indexOf('174 Hz'), 'binaural block precedes solfeggio block');
+      expectTrue(html.includes('528 Hz Crystal Chime'), 'feature card mentions the crystal chime');
+    });
+
+    /* ---- SCENARIO 73 ---- */
+    await scenario('73. Solfeggio button click → L/R sliders + number inputs + oscillators snap to the pure tone', async () => {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+
+      // While NOT playing the selection is recorded so the next start plays it.
+      const solWrap = c.stub('.modes-sol');
+      const pick = (m) => solWrap.querySelectorAll().find((b) => b.dataset.mode === m);
+      const clickSol = (m) => solWrap.dispatch('click', {
+        target: { closest: (sel) => (sel === 'button[data-mode]' ? pick(m) : null) },
+      });
+      clickSol('741');
+      expectEqual(fb.frequencyRange.left, 741, 'not-playing: left state recorded on click');
+      expectEqual(fb.frequencyRange.right, 741, 'not-playing: right state recorded on click');
+      expectEqual(c.stub('.fr-sl-l').value, '741', 'L slider mirrored while paused');
+      expectEqual(c.stub('.fr-num-r').value, '741', 'R input mirrored while paused');
+      expectEqual(c.stub('.frange-beat').textContent, 'Beat: 0 Hz (Pure Tone)', 'pure-tone beat label while paused');
+
+      fb.play();
+      await waitFor(() => fb.isPlaying, 2000, 'playing after solfeggio click');
+      expectEqual(MockAudioContext.oscs.at(-2).frequency.value, 741, 'osc L starts on 741');
+      expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 741, 'osc R starts on 741');
+
+      // Click 963 while playing: everything snaps instantly.
+      clickSol('963');
+      expectEqual(c.stub('.fr-sl-l').value, '963', 'L slider snapped to 963');
+      expectEqual(c.stub('.fr-sl-r').value, '963', 'R slider snapped to 963');
+      expectEqual(c.stub('.fr-num-l').value, '963', 'L number input snapped to 963');
+      expectEqual(c.stub('.fr-num-r').value, '963', 'R number input snapped to 963');
+      expectEqual(c.stub('.frange-beat').textContent, 'Beat: 0 Hz (Pure Tone)', 'pure-tone beat label after click');
+      const oscL = MockAudioContext.oscs.at(-2);
+      const oscR = MockAudioContext.oscs.at(-1);
+      expectEqual(oscL.frequency.value, 963, 'osc L snapped to 963 (instant setValueAtTime)');
+      expectEqual(oscR.frequency.value, 963, 'osc R snapped to 963 (instant setValueAtTime)');
+      expectEqual(Math.abs(oscR.frequency.value - oscL.frequency.value), 0, 'equal phase — no beat');
+      expectTrue(oscL.frequency.lastRamp !== 963, 'instant jump scheduled no sweep toward 963 (click-free)');
+
+      // Slider/input range must allow the top of the Solfeggio scale (963 Hz).
+      const tpl = c.root.innerHTML;
+      expectTrue(tpl.includes('class="fr-sl fr-sl-l" min="0" max="1000" step="1"'), 'L slider max covers 963');
+      expectTrue(tpl.includes('class="fr-sl fr-sl-r" min="0" max="1000" step="1"'), 'R slider max covers 963');
+      expectTrue(tpl.includes('class="fr-num fr-num-l" min="0" max="1000"'), 'L number input max covers 963');
+      expectTrue(tpl.includes('class="fr-num fr-num-r" min="0" max="1000"'), 'R number input max covers 963');
     });
   } finally { env.restore(); }
 }
@@ -2528,14 +2799,14 @@ async function extensionAuditScenarios() {
     expectEqual(payload.v, 1, 'version');
     expectEqual(payload.exp - payload.iat, 12 * 3600 * 1000, 'iat..exp window = 12h');
     expectTrue(payload.iat <= Date.now() && payload.exp > Date.now(), 'token is live right now');
-    // Matrix parity: worker ships the same Delta + Solfeggio coefficients the
-    // client falls back to, so production tokens can drive every UI mode.
+    // Matrix parity: worker ships the same Delta + full Solfeggio coefficients
+    // the client falls back to, so production tokens can drive every UI mode.
     expectEqual(payload.mods.delta.l, 100, 'delta left 100');
     expectEqual(payload.mods.delta.r, 102, 'delta right 102');
-    expectEqual(payload.mods['432'].l, 432, 'solfeggio 432 = 432 Hz');
-    expectEqual(payload.mods['432'].r, 432, 'solfeggio 432 equal-phase (mono)');
-    expectEqual(payload.mods['528'].l, 528, 'solfeggio 528 = 528 Hz');
-    expectEqual(payload.mods['528'].r, 528, 'solfeggio 528 equal-phase (mono)');
+    for (const [m, f] of [['174', 174], ['285', 285], ['396', 396], ['417', 417], ['432', 432], ['528', 528], ['639', 639], ['741', 741], ['852', 852], ['963', 963]]) {
+      expectEqual(payload.mods[m].l, f, 'solfeggio ' + m + ' = ' + f + ' Hz (left)');
+      expectEqual(payload.mods[m].r, f, 'solfeggio ' + m + ' equal-phase (right mirrors left)');
+    }
     // Re-verify issues a fresh token → no stable replay vector
     const res2 = await postJSON(env, '/api/verify-license', { apiKey: key, domain: 'replay.test' });
     const v2 = await res2.json();
@@ -2559,7 +2830,7 @@ async function extensionAuditScenarios() {
       expectEqual(MockAudioContext.oscs.at(-2).frequency.value, 220, 'fresh token left 220');
       expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 236, 'fresh token right 236');
       const g = MockAudioContext.gains.at(-1).gain;
-      expectApprox(g.lastRamp, 0.05 * 0.7 * 0.9, 1e-9, 'fresh gain 0.9 applied');
+      expectApprox(g.lastRamp, 0.35 * 0.7 * 0.9, 1e-9, 'fresh gain 0.9 applied');
     } finally { envB.restore(); }
   });
 }
@@ -2594,12 +2865,12 @@ async function webstoreComplianceScenarios() {
   });
 
   /* ---- SCENARIO 53 ---- */
-  await scenario('53. Store manifest: v1.4.0, full icon set wired, developer/homepage_url, minimal permissions', async () => {
+  await scenario('53. Store manifest: v1.3.0, full icon set wired, developer/homepage_url, storage-only + strict CSP', async () => {
     const fsMod = await import('node:fs');
     const manifestPath = new URL('../client/manifest.json', import.meta.url);
     expectTrue(fsMod.existsSync(manifestPath), 'manifest.json present');
     const manifest = JSON.parse(fsMod.readFileSync(manifestPath, 'utf8'));
-    expectEqual(manifest.version, '1.4.0', 'version pinned to 1.4.0');
+    expectEqual(manifest.version, '1.3.0', 'version pinned to 1.3.0');
     expectEqual(manifest.manifest_version, 3, 'MV3');
 
     // Icon set: 16/32/48/128 files exist AND are wired into icons + default_icon
@@ -2617,9 +2888,10 @@ async function webstoreComplianceScenarios() {
     expectTrue(!!manifest.developer && typeof manifest.developer.url === 'string' && /^https:\/\//.test(manifest.developer.url), 'developer.url is https');
     expectTrue(typeof manifest.homepage_url === 'string' && /^https:\/\//.test(manifest.homepage_url), 'homepage_url is https');
 
-    // Minimal permission footprint: only notifications, no host_permissions
+    // Minimal permission footprint: storage only (unused `notifications` stripped),
+    // no host_permissions, strict content_security_policy (script-src 'self')
     const perms = manifest.permissions || [];
-    const allowed = ['storage', 'notifications'];
+    const allowed = ['storage'];
     for (const p of perms) {
       expectTrue(allowed.includes(p), 'permission "' + p + '" is within the minimal set');
     }
@@ -2628,6 +2900,14 @@ async function webstoreComplianceScenarios() {
     }
     expectEqual(perms.length, allowed.length, 'no extra permissions (got ' + JSON.stringify(perms) + ')');
     expectTrue(manifest.host_permissions === undefined || manifest.host_permissions.length === 0, 'no host_permissions');
+
+    // Strict CSP: extension pages may only run their own scripts (never eval/external)
+    const csp = manifest.content_security_policy || {};
+    const extPages = csp.extension_pages || '';
+    expectEqual(manifest.permissions.includes('notifications'), false, 'unused notifications permission removed');
+    expectTrue(/script-src 'self'/.test(extPages), 'CSP script-src restricts to self');
+    expectTrue(!/script-src[^;'"]*unsafe-eval/.test(extPages), 'CSP forbids unsafe-eval');
+    expectTrue(!/(eval\(|new Function\()/.test(fsMod.readFileSync(new URL('../client/focus-bot.js', import.meta.url), 'utf8')), 'no eval()/new Function() in client');
 
     // popup + content scripts still wired
     expectEqual(manifest.action && manifest.action.default_popup, 'popup.html', 'popup wired');

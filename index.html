@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FocusBot — Neural Sound Waves for Deep Focus</title>
+  <meta name="description" content="FocusBot is a lightweight, offline-first Chrome extension that synthesizes binaural frequencies, Solfeggio tones and ambient noise in real time with the Web Audio API. Zero telemetry, Smart Pomodoro, and a privacy-focused Bitcoin license." />
+  <meta property="og:title" content="FocusBot — Autonomous Deep Work Suite" />
+  <meta property="og:description" content="Neural Frequency Synthesizer + Smart Pomodoro + Ambient Mixer. 3-day free trial, then on-chain licensed. Zero telemetry, 100% offline-first." />
+  <meta property="og:type" content="website" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0a0f;
+      --surface:  #12121a;
+      --surface2: #171722;
+      --border:   #1e1e2a;
+      --text:     #e8e8ed;
+      --muted:    #6b6b7b;
+      --accent:   #38bdf8;
+      --accent2:  #818cf8;
+      --indigo:   #6c5ce7;
+      --orange:   #f7931a;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      line-height: 1.65; overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Subtle grid overlay ─────────────────────────── */
+    body::before {
+      content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    /* ── NAV ─────────────────────────────────────────── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 32px;
+      background: rgba(10,10,15,.85); backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { font-weight: 800; font-size: 18px; letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px; }
+    .logo .dot { width: 9px; height: 9px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--indigo));
+      box-shadow: 0 0 12px rgba(56,189,248,.7); }
+    nav .links { display: flex; align-items: center; gap: 22px; }
+    nav a { font-size: 13px; color: var(--muted); text-decoration: none; transition: color .2s; }
+    nav a:hover { color: var(--text); }
+    .nav-cta {
+      font-size: 13px; font-weight: 700; color: #0b192c !important;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      padding: 7px 16px; border-radius: 9999px; white-space: nowrap;
+    }
+    .nav-cta:hover { color: #0b192c !important; opacity: .9; }
+    @media (max-width: 640px) { nav .links a.modes-link, nav .links a.priv-md { display: none; } }
+
+    /* ── HERO ────────────────────────────────────────── */
+    .hero {
+      min-height: 88vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; text-align: center;
+      padding: 100px 24px 70px;
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 0%, rgba(108,92,231,.10) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 40% at 85% 15%, rgba(56,189,248,.07) 0%, transparent 60%);
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 12px; font-weight: 600; color: var(--accent);
+      background: rgba(56,189,248,.08); border: 1px solid rgba(56,189,248,.15);
+      padding: 6px 14px; border-radius: 999px; margin-bottom: 26px;
+    }
+    .hero-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 8px var(--accent); }
+    .hero h1 {
+      font-size: clamp(32px, 6vw, 62px); font-weight: 800;
+      letter-spacing: -1.5px; line-height: 1.08; max-width: 760px;
+    }
+    .hero h1 em {
+      font-style: normal;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    .hero p { font-size: 17px; color: var(--muted); max-width: 540px; margin: 20px auto 34px; line-height: 1.7; }
+    .hero-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: center; }
+    .hero-cta {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-size: 16px; font-weight: 700; color: #0b192c; border: 0; cursor: pointer;
+      padding: 15px 34px; border-radius: 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      box-shadow: 0 0 40px rgba(56,189,248,.25);
+      transition: transform .15s, box-shadow .2s;
+    }
+    .hero-cta:hover { transform: translateY(-2px); box-shadow: 0 0 60px rgba(56,189,248,.35); }
+    .hero-cta:active { transform: scale(0.97); }
+    .hero-cta svg { width: 20px; height: 20px; fill: #0b192c; }
+    .hero-cta svg path { fill: #0b192c !important; }
+    .hero-sec {
+      font-size: 14px; font-weight: 600; color: var(--text);
+      background: var(--surface); border: 1px solid var(--border);
+      padding: 15px 28px; border-radius: 14px; cursor: pointer; text-decoration: none;
+      transition: border-color .2s, transform .15s;
+    }
+    .hero-sec:hover { border-color: rgba(56,189,248,.4); transform: translateY(-2px); }
+    .hero-meta { margin-top: 26px; font-size: 12px; color: var(--muted); display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; }
+    .hero-meta span { display: inline-flex; align-items: center; gap: 6px; }
+
+    /* ── SECTIONS ────────────────────────────────────── */
+    section { padding: 96px 24px; max-width: 940px; margin: 0 auto; }
+    .section-label {
+      font-size: 12px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: 2px; color: var(--accent); text-align: center; margin-bottom: 12px;
+    }
+    .section-title { font-size: clamp(24px, 4vw, 36px); font-weight: 800; text-align: center; letter-spacing: -0.5px; margin-bottom: 12px; }
+    .section-desc { text-align: center; color: var(--muted); font-size: 15px; max-width: 580px; margin: 0 auto 46px; }
+
+    /* ── FEATURES ────────────────────────────────────── */
+    .features { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    @media (max-width: 700px) { .features { grid-template-columns: 1fr; } }
+    .feat {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 18px; padding: 24px;
+      transition: border-color .2s, transform .15s, box-shadow .2s;
+    }
+    .feat:hover { border-color: rgba(56,189,248,.35); transform: translateY(-3px); box-shadow: 0 8px 30px rgba(56,189,248,.06); }
+    .feat-icon { font-size: 26px; margin-bottom: 12px; }
+    .feat h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .feat p { font-size: 13.5px; color: var(--muted); line-height: 1.6; }
+
+    /* ── WAVES ───────────────────────────────────────── */
+    .waves { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    @media (max-width: 760px) { .waves { grid-template-columns: repeat(2, 1fr); } }
+    .wave-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 24px 16px; text-align: center;
+      transition: border-color .2s, transform .15s;
+    }
+    .wave-card:hover { border-color: rgba(108,92,231,.4); transform: translateY(-3px); }
+    .wave-icon { font-size: 26px; margin-bottom: 10px; }
+    .wave-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .wave-freq { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .wave-tag {
+      display: inline-block; margin-top: 10px; font-size: 10px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: 1px;
+      padding: 3px 10px; border-radius: 999px;
+      background: rgba(108,92,231,.1); color: var(--accent2);
+    }
+
+    /* ── FREQUENCY GUIDE ─────────────────────────────── */
+    .guide { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    @media (max-width: 620px) { .guide { grid-template-columns: 1fr; } }
+    .guide-block { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 22px 20px; }
+    .guide-block h3 {
+      font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.4px;
+      margin-bottom: 14px; display: flex; align-items: center; gap: 8px; color: var(--accent);
+    }
+    .guide-block h3 .ghash { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px rgba(56,189,248,.6); }
+    .guide-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .guide-item:last-child { border-bottom: 0; }
+    .guide-freq { flex: none; min-width: 88px; text-align: center; font-size: 11.5px; font-weight: 700; color: var(--text);
+      background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 9px; padding: 5px 6px; font-variant-numeric: tabular-nums; }
+    .guide-freq small { display: block; font-size: 9px; font-weight: 500; color: var(--muted); }
+    .guide-txt { font-size: 12.5px; color: #a1a1aa; line-height: 1.55; }
+    .guide-txt b { color: var(--text); }
+    .guide-feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+    @media (max-width: 620px) { .guide-feats { grid-template-columns: 1fr; } }
+    .guide-feat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; font-size: 12.5px; color: #a1a1aa; }
+    .guide-feat b { display: block; color: var(--text); margin-bottom: 3px; font-size: 13px; }
+
+    /* ── PRICING ─────────────────────────────────────── */
+    .pricing-section { text-align: center; }
+    .pricing-card {
+      display: inline-flex; flex-direction: column; align-items: center;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px; padding: 40px 48px; max-width: 420px; width: 100%; position: relative;
+    }
+    .pricing-card::before { content: ''; position: absolute; inset: -1px; border-radius: 21px;
+      background: linear-gradient(135deg, var(--accent), var(--orange)); z-index: -1; opacity: .14; }
+    .pricing-badge { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; color: var(--orange); margin-bottom: 16px; }
+    .pricing-amount { font-size: 48px; font-weight: 800; letter-spacing: -2px;
+      background: linear-gradient(135deg, #fff, #a1a1aa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .pricing-period { font-size: 14px; color: var(--muted); margin-top: 4px; margin-bottom: 24px; }
+    .pricing-features { list-style: none; width: 100%; margin-bottom: 28px; }
+    .pricing-features li { font-size: 14px; color: #a1a1aa; padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+    .pricing-features li::before { content: '✓'; color: var(--accent); font-weight: 700; }
+    .pricing-btn { font-size: 15px; font-weight: 700; color: #fff; border: 0; cursor: pointer; padding: 14px 32px; border-radius: 12px; width: 100%;
+      background: linear-gradient(135deg, var(--orange), #e67e22); box-shadow: 0 0 30px rgba(247,147,26,.2); text-decoration: none;
+      transition: transform .15s, box-shadow .2s; }
+    .pricing-btn:hover { transform: translateY(-2px); box-shadow: 0 0 50px rgba(247,147,26,.3); }
+    .pricing-btn:active { transform: scale(0.97); }
+    .pricing-note { font-size: 12px; color: var(--muted); margin-top: 14px; }
+    .payment-note { font-size: 12px; color: var(--muted); margin-top: 20px; max-width: 560px; line-height: 1.6; }
+
+    /* ── FOOTER ──────────────────────────────────────── */
+    footer { text-align: center; padding: 46px 24px 40px; border-top: 1px solid var(--border); }
+    .footer-links { display: flex; justify-content: center; gap: 22px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; }
+    .footer-links a { color: var(--accent); text-decoration: none; }
+    .footer-links a:hover { text-decoration: underline; }
+    footer p { font-size: 12px; color: #3f3f46; }
+    footer .text-sm { color: #3f3f46; }
+    footer .opacity-70 { opacity: .7; }
+    footer .btc-note { margin-top: 14px; font-size: 11.5px; color: #4b4b54; max-width: 700px; margin-left: auto; margin-right: auto; line-height: 1.6; }
+    .cta-strip { text-align: center; background: linear-gradient(135deg, rgba(56,189,248,.06), rgba(108,92,231,.08)); border: 1px solid var(--border); border-radius: 20px; padding: 48px 24px; margin-top: 20px; }
+    .cta-strip h3 { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
+    .cta-strip p { color: var(--muted); font-size: 14px; max-width: 460px; margin: 0 auto 24px; }
+
+    /* ── Base accent color for inline `.accent` helper ── */
+    .accent { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<!-- ── NAV ──────────────────────────────────────────────── -->
+<nav>
+  <div class="logo"><span class="dot"></span> FocusBot</div>
+  <div class="links">
+    <a href="#features">Features</a>
+    <a class="modes-link" href="#modes">Modes</a>
+    <a href="#guide">Frequency Guide</a>
+    <a class="priv-md" href="privacy.html">Privacy</a>
+    <a class="nav-cta" href="#pricing">Get Pro</a>
+  </div>
+</nav>
+
+<!-- ── HERO ─────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="hero-badge">Manifest V3 &middot; Zero Telemetry &middot; 100% Offline-First</div>
+  <h1>Neural Sound Waves for <em>Deep Focus</em></h1>
+  <p>FocusBot synthesizes binaural frequencies, Solfeggio tones and ambient noise in real time on your device — with a Smart Pomodoro timer and a privacy-first Bitcoin license. Nothing is tracked, recorded, or uploaded.</p>
+  <div class="hero-actions">
+    <a class="hero-cta" href="#guide">
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      Explore Frequencies
+    </a>
+    <a class="hero-sec" href="#pricing">Get FocusBot Pro</a>
+  </div>
+  <div class="hero-meta">
+    <span>🎧 3-day free trial</span>
+    <span>🔒 One-time 12&euro; lifetime license</span>
+    <span>⚡ Bitcoin on-chain</span>
+  </div>
+</section>
+
+<!-- ── FEATURES ─────────────────────────────────────────── -->
+<section id="features">
+  <div class="section-label">What It Does</div>
+  <h2 class="section-title">A Complete Deep-Work Suite</h2>
+  <p class="section-desc">Four tools, one lightweight Chrome extension — everything generated locally with the Web Audio API.</p>
+
+  <div class="features">
+    <div class="feat">
+      <div class="feat-icon">🌊</div>
+      <h3>Binaural Frequency Synthesizer</h3>
+      <p>Real-time binaural beats from Delta to Gamma (100&ndash;1000 Hz, custom range). Exact left/right pairs with zero audio files — synthesized in your browser.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">🎼</div>
+      <h3>Full Solfeggio Spectrum</h3>
+      <p>All ten Solfeggio tones, 174 Hz through 963 Hz, delivered as equal-phase mono carriers — including the famous 432 Hz and 528 Hz frequencies.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">🌧️</div>
+      <h3>Ambient Noise Mixer</h3>
+      <p>Pink, Brown, Rain and White noise layers sit under your tones with independent volume stages. Clearly audible, richly diffused ambient beds.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">🍅</div>
+      <h3>Smart Pomodoro</h3>
+      <p>25-minute focus / 5-minute break cycles that auto-start the frequencies with each focus phase and auto-pause on breaks. A soft 528 Hz crystal chime marks every transition.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">🔒</div>
+      <h3>Privacy-Focused Bitcoin License</h3>
+      <p>One-time €12 Bitcoin payment, direct to the developer. No card, no bank, no billing address — and a full 3-day frictionless trial before you pay.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">🪶</div>
+      <h3>Offline-First &amp; Zero Telemetry</h3>
+      <p>Every preference, your trial window and your license state stay in your local browser. No trackers, no analytics, no servers tracking what you do.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── MODES ────────────────────────────────────────────── -->
+<section id="modes">
+  <div class="section-label">Sound Modes</div>
+  <h2 class="section-title">Choose Your Brainwave</h2>
+  <p class="section-desc">Each mode targets a distinct cognitive state through precise frequency patterns.</p>
+
+  <div class="waves">
+    <div class="wave-card"><div class="wave-icon">⚡</div><div class="wave-name">Beta</div><div class="wave-freq">200 / 214 Hz &middot; Δ14</div><div class="wave-tag">Focus</div></div>
+    <div class="wave-card"><div class="wave-icon">🧠</div><div class="wave-name">Alpha</div><div class="wave-freq">200 / 210 Hz &middot; Δ10</div><div class="wave-tag">Learning</div></div>
+    <div class="wave-card"><div class="wave-icon">✨</div><div class="wave-name">Theta</div><div class="wave-freq">180 / 186 Hz &middot; Δ6</div><div class="wave-tag">Creativity</div></div>
+    <div class="wave-card"><div class="wave-icon">🌙</div><div class="wave-name">Delta</div><div class="wave-freq">100 / 102 Hz &middot; Δ2</div><div class="wave-tag">Deep Rest</div></div>
+    <div class="wave-card"><div class="wave-icon">🔬</div><div class="wave-name">Gamma</div><div class="wave-freq">200 / 240 Hz &middot; Δ40</div><div class="wave-tag">Problem Solving</div></div>
+    <div class="wave-card"><div class="wave-icon">🎵</div><div class="wave-name">432 Hz</div><div class="wave-freq">Solfeggio</div><div class="wave-tag">Clarity</div></div>
+    <div class="wave-card"><div class="wave-icon">🌿</div><div class="wave-name">528 Hz</div><div class="wave-freq">Solfeggio</div><div class="wave-tag">Deep Reset</div></div>
+    <div class="wave-card"><div class="wave-icon">🌊</div><div class="wave-name">Ambient</div><div class="wave-freq">Pink &middot; Brown &middot; Rain &middot; White</div><div class="wave-tag">Sessions</div></div>
+  </div>
+</section>
+
+<!-- ── FREQUENCY GUIDE ──────────────────────────────────── -->
+<section id="guide">
+  <div class="section-label">Frequency Guide</div>
+  <h2 class="section-title">FocusBot Frequency Guide</h2>
+  <p class="section-desc">Every frequency, its cognitive effect, and the tools that keep you in the zone.</p>
+
+  <div class="guide">
+    <div class="guide-block">
+      <h3><span class="ghash"></span> Binaural Waves</h3>
+      <div class="guide-item">
+        <div class="guide-freq">Delta<small>100 / 102 Hz &middot; Δ2</small></div>
+        <div class="guide-txt"><b>Deep &amp; restorative sleep.</b> The slowest band; promotes recovery, deep relaxation and sleep preparation.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Theta<small>180 / 186 Hz &middot; Δ6</small></div>
+        <div class="guide-txt"><b>Creativity &amp; meditation.</b> The dreamy zone behind insight, imagination and emotional rewiring.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Alpha<small>200 / 210 Hz &middot; Δ10</small></div>
+        <div class="guide-txt"><b>Relaxed alertness &amp; learning.</b> Calm, receptive focus — ideal for absorbing new material.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Beta<small>200 / 214 Hz &middot; Δ14</small></div>
+        <div class="guide-txt"><b>Active concentration.</b> The analytical, task-execution band for coding and deep work.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Gamma<small>200 / 240 Hz &middot; Δ40</small></div>
+        <div class="guide-txt"><b>Peak cognition.</b> Pattern recognition, problem solving and high-level synthesis.</div>
+      </div>
+    </div>
+
+    <div class="guide-block">
+      <h3><span class="ghash"></span> Solfeggio Tones</h3>
+      <div class="guide-item"><div class="guide-freq">174 Hz<small>Pain &amp; Stress</small></div><div class="guide-txt"><b>Pain &amp; stress reduction.</b> Physical relaxation and comfort.</div></div>
+      <div class="guide-item"><div class="guide-freq">285 Hz<small>Regeneration</small></div><div class="guide-txt"><b>Tissue &amp; energy regeneration.</b> Restores body and mind.</div></div>
+      <div class="guide-item"><div class="guide-freq">396 Hz<small>Relief</small></div><div class="guide-txt"><b>Freeing guilt &amp; fear.</b> The "liberation" tone.</div></div>
+      <div class="guide-item"><div class="guide-freq">417 Hz<small>Change</small></div><div class="guide-txt"><b>Facilitating change.</b> Unblocks stagnation.</div></div>
+      <div class="guide-item"><div class="guide-freq">432 Hz<small>Natural Tuning</small></div><div class="guide-txt"><b>Mental calm.</b> A grounded, soothing pitch.</div></div>
+      <div class="guide-item"><div class="guide-freq">528 Hz<small>Transformation</small></div><div class="guide-txt"><b>Deep reset.</b> The famous "miracle" tone.</div></div>
+      <div class="guide-item"><div class="guide-freq">639 Hz<small>Harmony</small></div><div class="guide-txt"><b>Communication &amp; harmony.</b> Balances relationships.</div></div>
+      <div class="guide-item"><div class="guide-freq">741 Hz<small>Clarity</small></div><div class="guide-txt"><b>Problem solving.</b> Clears mental noise.</div></div>
+      <div class="guide-item"><div class="guide-freq">852 Hz<small>Intuition</small></div><div class="guide-txt"><b>Awareness.</b> Awakens inner perception.</div></div>
+      <div class="guide-item"><div class="guide-freq">963 Hz<small>Higher Mind</small></div><div class="guide-txt"><b>Higher consciousness.</b> Clear perception.</div></div>
+    </div>
+  </div>
+
+  <div class="guide-feats">
+    <div class="guide-feat"><b>Ambient Mixer</b>Pink, Brown, Rain &amp; White noise under the tones.</div>
+    <div class="guide-feat"><b>Independent Volumes</b>Separate sliders for tone and ambient.</div>
+    <div class="guide-feat"><b>528 Hz Chime</b>Each Pomodoro change rings a synthesized bell.</div>
+    <div class="guide-feat"><b>Custom Range</b>Dial in any 0&ndash;1000 Hz binaural beat.</div>
+    <div class="guide-feat"><b>Smart Pomodoro</b>25-min focus auto-synced to your sound.</div>
+    <div class="guide-feat"><b>One-Time License</b>€12 once, 365 days, on-chain &amp; private.</div>
+  </div>
+</section>
+
+<!-- ── PRICING ──────────────────────────────────────────── -->
+<section class="pricing-section" id="pricing">
+  <div class="section-label">Pricing</div>
+  <h2 class="section-title">Unlock Unlimited Focus</h2>
+  <p class="section-desc">One-time payment. No subscriptions. Lifetime access.</p>
+
+  <div class="pricing-card">
+    <div class="pricing-badge">FocusBot Pro</div>
+    <div class="pricing-amount">12 &euro;</div>
+    <div class="pricing-period">one-time &middot; 365 days &middot; Bitcoin</div>
+    <ul class="pricing-features">
+      <li>3-day free trial first</li>
+      <li>Unlimited listening sessions</li>
+      <li>All binaural + full Solfeggio modes</li>
+      <li>Pink / Brown / Rain / White mixer</li>
+      <li>Custom frequency range</li>
+    </ul>
+    <a class="pricing-btn" href="https://github.com/runtime-stranger/focus-bot/releases" target="_blank" rel="noopener">Get FocusBot Pro</a>
+    <div class="pricing-note">Secure on-chain BTC payment &middot; instant activation</div>
+    <p class="payment-note"><em>(Payment Note: To maximize user privacy and prevent unauthorized recurring card charges, FocusBot exclusively accepts Bitcoin for lifetime licenses. No credit card details, billing addresses, or personal financial data are ever requested, processed, or stored.)</em></p>
+  </div>
+</section>
+
+<!-- ── CTA STRIP ────────────────────────────────────────── -->
+<section>
+  <div class="cta-strip">
+    <h3>Ready to go deeper?</h3>
+    <p>Install the extension from the Chrome Web Store or load it unpacked in Developer Mode. Try it free for 3 days with no payment details required.</p>
+    <a class="pricing-btn" style="width:auto; padding:14px 40px;" href="https://github.com/runtime-stranger/focus-bot/releases" target="_blank" rel="noopener">Download FocusBot</a>
+  </div>
+</section>
+
+<!-- ── FOOTER ───────────────────────────────────────────── -->
+<footer>
+  <div class="footer-links">
+    <a href="#guide">Frequency Guide</a>
+    <a href="#pricing">Licensing</a>
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="https://github.com/runtime-stranger/focus-bot" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <p class="text-sm opacity-70">© 2026 FocusBot. All rights reserved. • Released: September 2026</p>
+  <p class="btc-note"><em>(Payment Note: To maximize user privacy and prevent unauthorized recurring card charges, FocusBot exclusively accepts Bitcoin for lifetime licenses. No credit card details, billing addresses, or personal financial data are ever requested, processed, or stored.)</em></p>
+</footer>
+
+</body>
+</html>

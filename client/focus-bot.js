@@ -13,11 +13,12 @@
  *    - Audio engine: 2x OscillatorNode (pure Left/Right sine) + ChannelMerger +
  *      single Master GainNode (ceiling 0.05 — hearing safety). The AudioContext
  *      is created once, then managed solely via suspend()/resume().
- *    - Modes: Binaural Delta/Theta/Alpha/Beta/Gamma + Solfeggio 432Hz/528Hz
- *      (equal-phase monaural tones) + custom 0–1000 Hz range.
+ *    - Modes: Binaural Delta/Theta/Alpha/Beta/Gamma + the FULL Solfeggio scale
+ *      174–963 Hz (equal-phase monaural tones) + custom 0–1000 Hz range.
  *    - Smart Pomodoro: 25 min focus / 5 min break cycles. Focus phase starts
  *      the frequency automatically; each phase change rings a fully synthesized
- *      gong chime (D5, 587.33 Hz, exponential 2.5 s decay — no audio files).
+ *      528 Hz crystal chime (Solfeggio "transformation" tone, exponential
+ *      2.5 s decay — no audio files).
  *    - Ambient mixer: optional Pink / Brown / Rain / White noise layers mixed
  *      under the binaural carrier (diffusion buffers generated at runtime —
  *      no audio files are ever downloaded). Binaural & ambient volumes are
@@ -85,33 +86,46 @@
   /* ==========================================================================
    * 1) CONSTANTS
    * ======================================================================== */
-  const MASTER_GAIN_MAX = 0.05;                     // Master slider ceiling (safe range)
-  const BOOST_GAIN = 6.0;                           // Pre-amp boost (effective max = 0.3)
+  const MASTER_GAIN_MAX = 0.35;                     // Master slider ceiling — 3.5× output-boost ceiling (dramatic gain)
+  const BOOST_GAIN = 6.0;                           // Pre-amp boost (effective max = 0.6)
   const DEFAULT_VOLUME = 0.7;
   const SWEEP_SEC = 1.2;                            // Frequency sweep on mode switch
   const SUSPEND_DELAY_MS = 330;                     // Suspend delay after fade-out
-  // Ambient gain staging: per-layer output levels (after makeup) engineered to
-  // sit net, balanced and clearly audible under headphones. The ambient master
-  // bus then feeds the soft limiter → master; the binaural carrier runs through
-  // its own 0.50 stage so the two never stomp on each other.
-  const AMBIENT_LEVELS = { pink: 0.75, brown: 0.8, rain: 0.85, white: 0.6 };
+  // Per-channel carrier gain: binaural + Solfeggio oscillator outputs run through
+  // their own 0.85–1.0 range stage (task: raise oscillator gain multipliers ~2.5×;
+  // the slider then freely scales the whole bus, capped by the master ceiling).
+  const CHAN_GAIN = 1.5;            // default channel output gain (solfeggio + binaural oscillators, boosted)
+  const BASS_BOOST_DB = 4;          // +4 dB equal-loudness compensation
+  const BASS_BOOST_CEILING_HZ = 200; // carriers below this (Delta 100/102, Theta 180/186, 174 Hz) get the boost
+  // Ambient gain staging: per-layer output levels engineered to be UNMISSABLE —
+  // each layer is clearly audible under headphones even at moderate volume, and
+  // the ambient master bus sits at unity so nothing feels ducked.
+  const AMBIENT_LEVELS = { pink: 0.9, brown: 1.0, rain: 0.95, white: 0.8 };
   const AMBIENT_KINDS = ['pink', 'brown', 'rain', 'white'];   // creation + UI order
-  const AMBIENT_MASTER_GAIN = 0.8;      // ambient master bus (0.80-1.0 band) — default
-  const BINAURAL_GAIN = 0.5;            // binaural carrier stage into the master — default
-  const PINK_MAKEUP = 2.5;              // compensates pink shaping energy loss
-  const RAIN_FILTER_Q = 1.2;            // low-pass resonance at 1250 Hz
+  const AMBIENT_MASTER_GAIN = 1.0;      // ambient master bus at unity — no hushed feel
+  const BINAURAL_GAIN = 1.0;            // binaural carrier stage into the master — default (slider 0..2.0)
+  const PINK_MAKEUP = 3.0;              // ×3 makeup compensates pink shaping energy loss
+  const BROWN_BASS_GAIN = 1.6;          // master bass booster — deep brown sub-bass clearly audible
+  const RAIN_FILTER_Q = 1.2;            // low-pass resonance at 1200 Hz
   const FADE_S = 0.05;                  // micro fade-in/out — pop/click-free
-  const AMBIENT_COMPRESSOR = { threshold: -18, knee: 24, ratio: 6, attack: 0.005, release: 0.2 };
+  /** Final output limiter: [Oscillators/Ambience] → channel gains → master gain
+   *  → compressor → destination. A tight brick-wall catches every peak, so the
+   *  raised master ceiling stays clean instead of hardening/clipping. */
+  const MASTER_COMPRESSOR = { threshold: -6, knee: 12, ratio: 8, attack: 0.003, release: 0.15 };
   const BROWN_SLOPE = 0.02;             // 6 dB/octave integration constant for brown noise
-  const BROWN_SLOPE_GAIN = 3.2;         // normalize the deep-bass brown output
+  const BROWN_SLOPE_GAIN = 6.0;         // output[i] = ((lastOut + 0.02·white) / 1.02) · 6.0 (×6 brown boost)
+  const RAIN_AM_HZ = 3.0;               // subtle droplet amplitude modulation rate
+  const RAIN_AM_DEPTH = 0.18;           // ±18% amplitude wobble → rainfall shimmer
 
   /** 3-day frictionless trial — sound unlocked for the first 72 hours. */
   const TRIAL_DAYS = 3;
   const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
   const TRIAL_CHECK_MS = 30 * 1000;     // mid-session expiry watchdog
 
-  /** Meditative gong/chime for Pomodoro phase transitions (pure synthesis). */
-  const CHIME_FREQ = 587.33;            // D5
+  /** Meditative crystal chime for Pomodoro phase transitions (pure synthesis).
+   *  528 Hz — the "miracle / transformation" Solfeggio tone — with a long,
+   *  glass-like exponential tail so the break is announced without harshness. */
+  const CHIME_FREQ = 528.0;             // 528 Hz Solfeggio "crystal" tone
   const CHIME_ATTACK_S = 0.01;          // fast attack
   const CHIME_DECAY_S = 2.5;            // long exponential tail
   const CHIME_PEAK = 0.06;              // modest peak — hearing safe, clearly audible
@@ -129,8 +143,17 @@
     alpha: { label: 'Alpha',  desc: 'Relaxation',     hz: 10, left: 200, right: 210 },
     beta:  { label: 'Beta',   desc: 'Focus',          hz: 14, left: 200, right: 214 },
     gamma: { label: 'Gamma',  desc: 'Peak Cognition', hz: 40, left: 200, right: 240 },
-    '432': { label: '432Hz',  desc: 'Clarity',        hz: 0,  left: 432, right: 432 },
-    '528': { label: '528Hz',  desc: 'Deep Reset',     hz: 0,  left: 528, right: 528 },
+    // ── Full Solfeggio scale — equal-phase monaural pure tones ───────────────
+    '174': { label: '174Hz', desc: 'Pain Relief',      left: 174, right: 174 },
+    '285': { label: '285Hz', desc: 'Regeneration',     left: 285, right: 285 },
+    '396': { label: '396Hz', desc: 'Release Fear',     left: 396, right: 396 },
+    '417': { label: '417Hz', desc: 'Facilitate Change', left: 417, right: 417 },
+    '432': { label: '432Hz', desc: 'Natural Tuning',   left: 432, right: 432 },
+    '528': { label: '528Hz', desc: 'Deep Reset',       left: 528, right: 528 },
+    '639': { label: '639Hz', desc: 'Harmony & Love',   left: 639, right: 639 },
+    '741': { label: '741Hz', desc: 'Problem Solving',  left: 741, right: 741 },
+    '852': { label: '852Hz', desc: 'Intuition',        left: 852, right: 852 },
+    '963': { label: '963Hz', desc: 'Higher Mind',      left: 963, right: 963 },
   };
 
   /** Background ambiance layers (binaural carrier + noise). */
@@ -195,6 +218,12 @@
     /* Custom frequency range — MODES[mode] applies while null */
     custom: null,        // { left, right } (left <= right, 0..1000)
 
+    /* Live oscillator frequency targets — last applied via the audio graph.
+     * Keeping them here (even when NOT playing) means the NEXT start() plays
+     * exactly the tone the user last selected (e.g. a Solfeggio carrier). */
+    currentLeftFreq: null,
+    currentRightFreq: null,
+
     pro: false,
     proExpiresAt: null,
     verifying: false,
@@ -203,14 +232,14 @@
     trialStart: null,
 
     /* Independent volume stages (persisted) */
-    volBinaural: BINAURAL_GAIN,          // "Binaural / Tone volume" (0..1)
+    volBinaural: BINAURAL_GAIN,          // "Binaural / Tone volume" (0..2, default 1.0)
     volAmbient: AMBIENT_MASTER_GAIN,     // "Ambient Mixer volume" (0..1)
 
     /* Signed coefficient payload from /api/verify-license (client hardening) */
     engine: null,        // { v, seed, gain, mods:{ <mode>:{l,r,ph,k} } }
 
     audioCtx: null,      // single AudioContext — created once
-    nodes: null,         // { oscL, oscR, merger, boostGain, binauralGain, ambMasterGain, pinkMakeup, ambGains, ambCompressor, masterGain, amb }
+    nodes: null,         // { oscL, chanLGain, oscR, chanRGain, merger, boostGain, binauralGain, ambMasterGain, pinkMakeup, ambGains, brownBass, masterGain, masterCompressor, amb }
     suspendTimer: null,
     autoplayBlocked: false,       // browser refused resume() until a user gesture
     autoplayNoticeShown: false,   // only surface the autoplay toast once
@@ -289,8 +318,8 @@
     const merger = ctx.createChannelMerger();
     const boostGain = ctx.createGain();
     boostGain.gain.value = BOOST_GAIN;
-    // Gain staging: the binaural carrier runs through its own 0.50 stage and
-    // the ambient layers through an 0.80 master bus → soft limiter → master.
+    // Gain staging: the binaural carrier runs through its own 1.00 stage and
+    // the ambient layers through a unity master bus → master → final limiter.
     // Everything is created BEFORE masterGain so the master stays the last
     // created gain node (keeps `gains.at(-1) === masterGain` for tests).
     const binauralGain = ctx.createGain();
@@ -299,14 +328,6 @@
     ambMasterGain.gain.value = STATE.volAmbient;   // persisted "Ambient Mixer" stage
     const pinkMakeup = ctx.createGain();
     pinkMakeup.gain.value = PINK_MAKEUP;
-    const ambCompressor = ctx.createDynamicsCompressor();
-    try {
-      ambCompressor.threshold.value = AMBIENT_COMPRESSOR.threshold;
-      ambCompressor.knee.value = AMBIENT_COMPRESSOR.knee;
-      ambCompressor.ratio.value = AMBIENT_COMPRESSOR.ratio;
-      ambCompressor.attack.value = AMBIENT_COMPRESSOR.attack;
-      ambCompressor.release.value = AMBIENT_COMPRESSOR.release;
-    } catch (_) {}
     const ambGains = {};
     for (const k of AMBIENT_KINDS) {
       const g = ctx.createGain();
@@ -314,45 +335,98 @@
       g.connect(ambMasterGain);
       ambGains[k] = g;
     }
+    // Brown bass booster — static master gain that only the brown layer feeds,
+    // so its deep sub-bass stays clearly audible without tool-clipping.
+    const brownBass = ctx.createGain();
+    brownBass.gain.value = BROWN_BASS_GAIN;
+    if (brownBass && ambGains.brown) brownBass.connect(ambGains.brown);
+    // Per-channel oscillator output gains (0.85–1.0 range, +4 dB bass boost on
+    // low-frequency carriers). Each oscillator feeds its own channel stage.
+    const chanLGain = ctx.createGain();
+    chanLGain.gain.value = CHAN_GAIN;
+    const chanRGain = ctx.createGain();
+    chanRGain.gain.value = CHAN_GAIN;
     const masterGain = ctx.createGain();
     masterGain.gain.value = 0;
+    // Final output limiter — every source lands here through the master bus.
+    const masterCompressor = ctx.createDynamicsCompressor();
+    try {
+      masterCompressor.threshold.value = MASTER_COMPRESSOR.threshold;
+      masterCompressor.knee.value = MASTER_COMPRESSOR.knee;
+      masterCompressor.ratio.value = MASTER_COMPRESSOR.ratio;
+      masterCompressor.attack.value = MASTER_COMPRESSOR.attack;
+      masterCompressor.release.value = MASTER_COMPRESSOR.release;
+    } catch (_) {}
 
-    oscL.connect(merger);
-    oscR.connect(merger);
+    // [Oscillators] → [channel gains] → [boost] → [binaural stage] → master gain
+    oscL.connect(chanLGain);
+    chanLGain.connect(merger);
+    oscR.connect(chanRGain);
+    chanRGain.connect(merger);
     merger.connect(boostGain);
     boostGain.connect(binauralGain);
     binauralGain.connect(masterGain);
-    // Pink makeup gain is static — wire it into the pink layer once so layer
-    // teardown never disconnects a shared node.
+    // [Ambience] → [layer gains] → [ambient master bus] → master gain
     if (pinkMakeup && ambGains.pink) pinkMakeup.connect(ambGains.pink);
-    ambMasterGain.connect(ambCompressor);
-    ambCompressor.connect(masterGain);
-    masterGain.connect(ctx.destination);
+    ambMasterGain.connect(masterGain);
+    // [Master gain] → [compressor] → destination (final output limiter)
+    masterGain.connect(masterCompressor);
+    masterCompressor.connect(ctx.destination);
 
     oscL.start();
     oscR.start();
 
     STATE.audioCtx = ctx;
     STATE.nodes = {
-      oscL, oscR, merger, boostGain, binauralGain, ambMasterGain, pinkMakeup,
-      ambGains, ambCompressor, masterGain, amb: {},
+      oscL, oscR, chanLGain, chanRGain, merger, boostGain, binauralGain,
+      ambMasterGain, pinkMakeup, brownBass, ambGains, masterGain,
+      masterCompressor, amb: {},
     };
   }
 
-  /** Apply the active frequencies to the oscillators (live sweep) */
-  function applyFrequencies() {
-    if (!STATE.nodes) return;
+  /** Per-channel oscillator output gain for one carrier frequency:
+   *  low carriers (Delta/Theta/174 Hz — where the human ear is least
+   *  sensitive) get a +4 dB amplitude bump via the equal-loudness contour. */
+  function carrierGain(hz) {
+    return (hz < BASS_BOOST_CEILING_HZ)
+      ? CHAN_GAIN * Math.pow(10, BASS_BOOST_DB / 20)
+      : CHAN_GAIN;
+  }
+
+  /** Apply the active frequencies to the oscillators (live sweep).
+   *  `instant` → snap straight to the target at the current sample time
+   *  (zero-click pure-tone jumps, used by Solfeggio carriers); otherwise a
+   *  gentle 1.2 s sweep lets binaural beats glide into place. */
+  function applyFrequencies(instant) {
     const f = activeFreqs();
+    // Persist the applied targets FIRST, so even when the audio graph is not
+    // created yet (or was suspended) the NEXT start() resumes the exact tone.
+    STATE.currentLeftFreq = f.left;
+    STATE.currentRightFreq = f.right;
+    if (!STATE.nodes) return;
     const ph = activePhase();
     const t = STATE.audioCtx ? STATE.audioCtx.currentTime : 0;
     try {
+      // Channel-stage gain follows the carrier: bass-boosted on low modes.
+      STATE.nodes.chanLGain.gain.cancelScheduledValues(t);
+      STATE.nodes.chanRGain.gain.cancelScheduledValues(t);
+      STATE.nodes.chanLGain.gain.setValueAtTime(carrierGain(f.left), t);
+      STATE.nodes.chanRGain.gain.setValueAtTime(carrierGain(f.right), t);
       STATE.nodes.oscL.frequency.cancelScheduledValues(t);
-      STATE.nodes.oscL.frequency.setValueAtTime(STATE.nodes.oscL.frequency.value || f.left, t);
-      STATE.nodes.oscL.frequency.linearRampToValueAtTime(f.left, t + SWEEP_SEC);
       STATE.nodes.oscR.frequency.cancelScheduledValues(t);
-      STATE.nodes.oscR.frequency.setValueAtTime(STATE.nodes.oscR.frequency.value || f.right, t);
-      STATE.nodes.oscR.frequency.linearRampToValueAtTime(f.right, t + SWEEP_SEC + (ph * 0.03));
+      if (instant) {
+        // Pure-tone jump: no intermediate ramp → no click, no perceived glide.
+        STATE.nodes.oscL.frequency.setValueAtTime(f.left, t);
+        STATE.nodes.oscR.frequency.setValueAtTime(f.right, t);
+      } else {
+        STATE.nodes.oscL.frequency.setValueAtTime(STATE.nodes.oscL.frequency.value || f.left, t);
+        STATE.nodes.oscL.frequency.linearRampToValueAtTime(f.left, t + SWEEP_SEC);
+        STATE.nodes.oscR.frequency.setValueAtTime(STATE.nodes.oscR.frequency.value || f.right, t);
+        STATE.nodes.oscR.frequency.linearRampToValueAtTime(f.right, t + SWEEP_SEC + (ph * 0.03));
+      }
     } catch (_) {
+      STATE.nodes.chanLGain.gain.value = carrierGain(f.left);
+      STATE.nodes.chanRGain.gain.value = carrierGain(f.right);
       STATE.nodes.oscL.frequency.value = f.left;
       STATE.nodes.oscR.frequency.value = f.right;
     }
@@ -382,10 +456,13 @@
     }
   }
 
-  /** Set + persist one volume stage ('binaural'|'ambient'). Values are 0–100%. */
+  /** Set + persist one volume stage ('binaural'|'ambient'). Values are 0–100%
+   *  for ambient but 0–200% for the binaural slider (its range is 0..2.0). */
   function setVolumeTarget(which, pct) {
-    const v = Math.min(100, Math.max(0, Number(pct) || 0)) / 100;
-    if (which === 'binaural' || which === 'bin' || which === 'tone') {
+    const isBin = which === 'binaural' || which === 'bin' || which === 'tone';
+    const maxPct = isBin ? 200 : 100;
+    const v = Math.min(maxPct, Math.max(0, Number(pct) || 0)) / 100;
+    if (isBin) {
       STATE.volBinaural = v;
       storageSet(LS.volBinaural, String(v));
     } else {
@@ -546,6 +623,9 @@
       return false;
     } finally {
       STATE.verifying = false;
+      // Footer/entry state follows license status on every outcome — the
+      // Buy Pro entry is always visible with a fixed label.
+      updateFooter();
     }
   }
 
@@ -594,7 +674,7 @@
       STATE.trialStart = ts;
       const present = (v) => v != null && v !== '';
       let vb = Number(saved && saved[LS.volBinaural]);
-      if (present(saved && saved[LS.volBinaural]) && Number.isFinite(vb) && vb >= 0 && vb <= 1) STATE.volBinaural = vb;
+      if (present(saved && saved[LS.volBinaural]) && Number.isFinite(vb) && vb >= 0 && vb <= 2) STATE.volBinaural = vb;
       let va = Number(saved && saved[LS.volAmbient]);
       if (present(saved && saved[LS.volAmbient]) && Number.isFinite(va) && va >= 0 && va <= 1) STATE.volAmbient = va;
     } catch (_) {}
@@ -774,7 +854,10 @@
     els.frSlR.value = String(f.right);
     els.frNumL.value = String(f.left);
     els.frNumR.value = String(f.right);
-    els.frBeat.textContent = 'Beat: \u0394 ' + Math.abs(f.right - f.left) + ' Hz';
+    // Equal-phase tones (Solfeggio carriers) are pure — there is no beat.
+    els.frBeat.textContent = f.left === f.right
+      ? 'Beat: 0 Hz (Pure Tone)'
+      : 'Beat: \u0394 ' + Math.abs(f.right - f.left) + ' Hz';
   }
 
   function setFrequencyRange(left, right) { enterCustomRange(normalizePair(left, right)); }
@@ -863,38 +946,58 @@
   /* ==========================================================================
    * 7e) AMBIENT MIXER — pink / brown / rain / white noise under the carrier
    * ======================================================================== */
+  function fillPink(data, sr) {
+    // Paul Kellet coupled-form filters — spectrally flat pink noise.
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < data.length; i++) {
+      const w = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + w * 0.0555179;
+      b1 = 0.99332 * b1 + w * 0.0750759;
+      b2 = 0.96900 * b2 + w * 0.1538520;
+      b3 = 0.86650 * b3 + w * 0.3104856;
+      b4 = 0.55000 * b4 + w * 0.5329522;
+      b5 = -0.7616 * b5 - w * 0.0168980;
+      const out = b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362;
+      b6 = w * 0.115926;
+      data[i] = out * 0.11;
+      // Tampon sonradan ×4 yükseltilir; tepe noktalarını zincirin sonundaki
+      // masterDynamicsCompressor sınırlar (bkz. makeNoiseBuffer → master gain).
+    }
+  }
+
   function makeNoiseBuffer(ctx, kind) {
-    const len = Math.max(48000, Math.floor(ctx.sampleRate * 2) || 48000);
+    // White noise runs a full 5-second loop (unsealed tail); the shaped layers
+    // need a short cached loop because they are spectrally colored anyway.
+    const isWhite = kind === 'white';
+    const len = Math.max(48000, Math.floor(ctx.sampleRate * (isWhite ? 5 : 2)) || 48000);
     const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     if (kind === 'pink') {
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-      for (let i = 0; i < len; i++) {
-        const w = Math.random() * 2 - 1;
-        b0 = 0.99886 * b0 + w * 0.0555179;
-        b1 = 0.99332 * b1 + w * 0.0750759;
-        b2 = 0.96900 * b2 + w * 0.1538520;
-        b3 = 0.86650 * b3 + w * 0.3104856;
-        b4 = 0.55000 * b4 + w * 0.5329522;
-        b5 = -0.7616 * b5 - w * 0.0168980;
-        const out = b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362;
-        b6 = w * 0.115926;
-        data[i] = out * 0.11;
-        // keep float values in [-1,1]
-        if (data[i] > 1) data[i] = 1; else if (data[i] < -1) data[i] = -1;
+      fillPink(data, ctx.sampleRate);
+      // KLANG üstünde ham veriyi ×4 yükselt (kompresör tepeleri sınırlar).
+      for (let i = 0; i < data.length; i++) data[i] *= 4.0;
+    } else if (kind === 'rain') {
+      // Rain = pink spectrum + light amplitude modulation so the hiss gently
+      // "beats" like light rainfall. A runtime low-pass (~1200 Hz) then turns
+      // the hiss into precipitation (see buildAmbientLayer).
+      fillPink(data, ctx.sampleRate);
+      for (let i = 0; i < data.length; i++) {
+        const mod = 1.0 + RAIN_AM_DEPTH * Math.sin(2 * Math.PI * RAIN_AM_HZ * i / buffer.sampleRate);
+        data[i] *= mod * 5.0;   // ×5 rain boost; kompresör tepeleri sınırlar
       }
     } else if (kind === 'brown') {
       // Brown (red/random-walk) noise: integrate white → 6 dB/octave roll-off,
       // the deepest, warmest of the ambient family.
+      // output[i] = ((lastOut + (0.02 * white)) / 1.02) * 6.0
       let lastOut = 0;
       for (let i = 0; i < len; i++) {
         const white = Math.random() * 2 - 1;
         lastOut = (lastOut + BROWN_SLOPE * white) / (1 + BROWN_SLOPE);
-        data[i] = lastOut * BROWN_SLOPE_GAIN;
-        if (data[i] > 1) data[i] = 1; else if (data[i] < -1) data[i] = -1;
+        data[i] = lastOut * BROWN_SLOPE_GAIN;   // ×6 brown boost; kompresör tepeleri sınırlar
       }
     } else {
-      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      // White noise: ×4 boost; kompresör tepeleri sınırlar.
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 4.0;
     }
     return buffer;
   }
@@ -921,21 +1024,27 @@
       src.loop = true;
       let head = src;
       if (kind === 'pink') {
-        // Pink: ×2.5 makeup compensates the shaping/spectral energy loss. The
+        // Pink: ×3 makeup compensates the shaping/spectral energy loss. The
         // makeup node is static (created once) — the teardown skips it.
         const makeup = STATE.nodes.pinkMakeup;
         if (makeup) { src.connect(makeup); head = null; }
+      } else if (kind === 'brown') {
+        // Brown: runs through the static deep-bass booster before its layer
+        // gain, so the sub-bass is unmistakably present in the mix.
+        const bass = STATE.nodes.brownBass;
+        if (bass) { src.connect(bass); head = null; }
       } else if (kind === 'rain' && ctx.createBiquadFilter) {
-        // Rain: gentle low-pass at 1250 Hz softens the hiss into precipitation.
+        // Rain: BiquadFilter low-pass ~1200 Hz softens the pink+AM hiss into
+        // precipitation, so the droplet shimmer stays clearly audible.
         const filter = ctx.createBiquadFilter();
         filter.type = 'lowpass';
-        filter.frequency.value = 1250;
+        filter.frequency.value = 1200;
         try { filter.Q.value = RAIN_FILTER_Q; } catch (_) {}
         src.connect(filter);
         head = filter;
       }
-      // Pink/rain route via a filter/makeup; brown + white connect directly so
-      // their untouched spectra reach the layer gain.
+      // Pink/brown/rain route via a filter/makeup/bass stage; white connects
+      // directly so its untouched spectrum reaches the layer gain.
       if (head) head.connect(layerGain(kind));
       src.start();
       STATE.nodes.amb[kind] = { src, head };
@@ -958,6 +1067,18 @@
     delete STATE.nodes.amb[kind];
   }
 
+  /** AudioContext.resume() — Chrome blocks autoplay until a user gesture, so the
+   *  first layer click on a freshly suspended context must kick it back to life. */
+  function resumeAudio() {
+    if (!STATE.audioCtx) return;
+    if (STATE.audioCtx.state === 'suspended') {
+      try {
+        const p = STATE.audioCtx.resume();
+        if (p && typeof p.then === 'function') p.catch(() => {});
+      } catch (_) {}
+    }
+  }
+
   function applyAmbients(next) {
     STATE.activeAmbients = next || new Set();
     ensureContext();
@@ -966,17 +1087,21 @@
       const active = STATE.activeAmbients.has(kind);
       if (active && !STATE.nodes.amb[kind]) buildAmbientLayer(kind);
       else if (!active && STATE.nodes.amb[kind]) tearDownAmbientLayer(kind);
-      // Micro fade in/out (FADE_S) — the layer level changes click-free
-      // instead of snapping, and the layer never exceeds its staged output.
+      // The layer gain is the on/off valve: sources stay looping, so each click
+      // snaps the layer gain to its staged level (or 0) instantly and the engine
+      // never rebuilds the whole loop for a mute.
       try {
         const g = layerGain(kind).gain;
         const t = STATE.audioCtx ? STATE.audioCtx.currentTime : 0;
-        g.setTargetAtTime(active ? (AMBIENT_LEVELS[kind] || 0) : 0, t, FADE_S);
+        g.setValueAtTime(active ? (AMBIENT_LEVELS[kind] || 0) : 0, t);
       } catch (_) {}
     }
     // Engaging any layer starts the engine so a pure ambient mix (no pomodoro)
     // still becomes audible under the binaural carrier.
-    if (STATE.activeAmbients.size > 0 && !STATE.playing) startPlayback();
+    if (STATE.activeAmbients.size > 0) {
+      resumeAudio();
+      if (!STATE.playing) startPlayback();
+    }
     updateAmbientUI();
   }
 
@@ -1056,15 +1181,18 @@
   function updateFooter() {
     if (STATE.pro) {
       els.quota.textContent = 'PRO \u00B7 Unlimited';
-      setHidden(els.buy, true);
     } else if (trialActive()) {
       // Living countdown badge — the trial is the default every user sees.
       els.quota.textContent = 'Deneme: ' + fmtTrialRemaining() + ' kald\u0131';
-      setHidden(els.buy, false);
     } else {
       els.quota.textContent = 'License required';
-      setHidden(els.buy, false);
     }
+    // The Buy Pro button is PERMANENTLY visible in EVERY license state — its
+    // label never changes. Clicking it always opens the license/payment modal,
+    // where Pro users see their status/key entry too (openUpsell renders
+    // pricing; applyLicense handles an already-live key).
+    els.buy.textContent = 'Buy Pro';
+    setHidden(els.buy, false);
   }
 
   function updatePlayingUI() {
@@ -1199,11 +1327,12 @@
   '.beat-card{text-align:center;margin-bottom:9px;padding:8px 10px;background:rgba(120,120,128,.22);border-radius:14px}' +
   '.beat-main{font-size:14px;font-weight:600}.beat-sub{font-size:11px;color:#98989f;margin-top:3px;font-variant-numeric:tabular-nums}' +
   '.play-wrap{display:flex;justify-content:center;margin-bottom:9px}' +
-  '.play{width:46px;height:46px;border-radius:50%;border:0;cursor:pointer;color:#06283d;display:flex;align-items:center;justify-content:center;' +
+  '.play{width:46px;height:46px;border-radius:50%;border:0;cursor:pointer;color:#0b192c;display:flex;align-items:center;justify-content:center;' +
     'background:linear-gradient(135deg,#38bdf8,#818cf8);box-shadow:0 8px 22px rgba(56,189,248,.4);transition:transform .18s ease}' +
+  '#icon-play,#icon-pause,.play-icon,.p-icon,.play svg,.play path{fill:#0b192c !important;color:#0b192c !important;stroke:#0b192c !important}' +
   '.play:hover{transform:scale(1.05)}.play:active{transform:scale(.92)}' +
   '.modes{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:5px;background:rgba(120,120,128,.22);border-radius:12px;padding:3px}' +
-  '.modes.modes-sol{grid-template-columns:repeat(2,1fr);margin-bottom:9px}' +
+  '.modes.modes-sol{grid-template-columns:repeat(5,1fr);margin-bottom:9px;background:rgba(120,120,128,.14)}' +
   '.modes button{border:0;background:transparent;color:#98989f;border-radius:10px;padding:6px 2px;cursor:pointer;' +
     'font-size:11.5px;font-weight:600;display:flex;flex-direction:column;gap:1px;align-items:center}' +
   '.modes button small{font-weight:500;font-size:9px;opacity:.75}' +
@@ -1254,6 +1383,13 @@
   '.buy{border:0;background:rgba(56,189,248,.16);color:#38bdf8;font-size:11.5px;font-weight:600;padding:7px 12px;' +
     'border-radius:999px;cursor:pointer}' +
   '.buy:hover{background:rgba(56,189,248,.26)}' +
+
+  '.btn-buy-pro{background:linear-gradient(135deg,#4ba3ff 0%,#6385ff 50%,#8077ff 100%) !important;' +
+    'color:#0b192c !important;font-weight:800 !important;font-size:11px !important;letter-spacing:.5px !important;' +
+    'border:none !important;border-radius:9999px !important;padding:4px 14px !important;cursor:pointer;' +
+    'box-shadow:0 0 8px rgba(75,163,255,.4) !important;transition:opacity .15s ease,transform .15s ease}' +
+  '.btn-buy-pro:hover{opacity:.9;transform:scale(1.03)}' +
+  '.btn-buy-pro:active{transform:scale(1.03);opacity:1}' +
 
   /* ---- Overlay / Modal ---- */
   '.overlay{position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;' +
@@ -1321,7 +1457,7 @@
         '<svg class="p-icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>' +
       '</button>' +
     '</div>' +
-    '<div class="modes" role="group" aria-label="Frequency mode">' +
+    '<div class="modes" role="group" aria-label="Binaural wave mode">' +
       '<button type="button" data-mode="beta" class="active">Beta<small>14 Hz</small></button>' +
       '<button type="button" data-mode="alpha">Alpha<small>10 Hz</small></button>' +
       '<button type="button" data-mode="theta">Theta<small>6 Hz</small></button>' +
@@ -1329,8 +1465,16 @@
       '<button type="button" data-mode="gamma">Gamma<small>40 Hz</small></button>' +
     '</div>' +
     '<div class="modes modes-sol" role="group" aria-label="Solfeggio tone">' +
-      '<button type="button" data-mode="432">432Hz<small>Clarity</small></button>' +
-      '<button type="button" data-mode="528">528Hz<small>Reset</small></button>' +
+      '<button type="button" data-mode="174">174Hz<small>Pain Relief</small></button>' +
+      '<button type="button" data-mode="285">285Hz<small>Regeneration</small></button>' +
+      '<button type="button" data-mode="396">396Hz<small>Release Fear</small></button>' +
+      '<button type="button" data-mode="417">417Hz<small>Facilitate</small></button>' +
+      '<button type="button" data-mode="432">432Hz<small>Natural</small></button>' +
+      '<button type="button" data-mode="528">528Hz<small>Deep Reset</small></button>' +
+      '<button type="button" data-mode="639">639Hz<small>Harmony</small></button>' +
+      '<button type="button" data-mode="741">741Hz<small>Problem Solve</small></button>' +
+      '<button type="button" data-mode="852">852Hz<small>Intuition</small></button>' +
+      '<button type="button" data-mode="963">963Hz<small>Higher Mind</small></button>' +
     '</div>' +
     '<div class="frange">' +
       '<div class="frange-head">' +
@@ -1355,7 +1499,7 @@
     '</label>' +
     '<label class="vol">' +
       '<span class="vol-tag">Binaural / Tone</span>' +
-      '<input class="vol-range vol-bin" type="range" min="0" max="100" step="1" value="50" aria-label="Binaural / Tone volume">' +
+      '<input class="vol-range vol-bin" type="range" min="0" max="200" step="1" value="100" aria-label="Binaural / Tone volume">' +
     '</label>' +
     '<label class="vol">' +
       '<span class="vol-tag">Ambient Mixer</span>' +
@@ -1386,7 +1530,7 @@
 
     '<footer class="foot">' +
       '<span class="quota"></span>' +
-      '<button type="button" id="fb-buy-btn" class="buy">Buy Pro</button>' +
+      '<button type="button" id="btn-buy-pro" class="buy btn-buy-pro">Buy Pro</button>' +
     '</footer>' +
   '</div>' +
 '</section>' +
@@ -1445,7 +1589,7 @@
     frSlL: $('.fr-sl-l'), frSlR: $('.fr-sl-r'),
     frNumL: $('.fr-num-l'), frNumR: $('.fr-num-r'),
     frReset: $('.frange-reset'), frBeat: $('.frange-beat'),
-    quota: $('.quota'), buy: $('#fb-buy-btn') || $('.buy'),
+    quota: $('.quota'), buy: $('#btn-buy-pro') || $('.buy'),
 
     pomoTime: $('.pomo-time') || $('#fb-pomo-time'),
     pomoState: $('.pomo-state') || $('#fb-pomo-state'),
@@ -1685,6 +1829,7 @@
           case 'toggleAmbient': toggleAmbient(msg.kind); reply(); break;
           case 'pomodoroStart': pomodoroStart(); reply(); break;
           case 'pomodoroStop': pomodoroReset(); reply(); break;
+          case 'openUpsell': openUpsell(); reply(); break;
           case 'openPanel': togglePanel(true); reply(); break;
           default: sendResponse({ ok: false, error: 'unknown_cmd' });
         }
@@ -1738,13 +1883,27 @@
     }
     STATE.mode = mode;
     STATE.custom = null;                 // picking a mode cancels the custom range
-    try {
-      Array.prototype.forEach.call(
-        els.modesWrap.querySelectorAll ? els.modesWrap.querySelectorAll('button[data-mode]') : [],
-        (b) => { b.classList.toggle('active', b.dataset.mode === mode); }
-      );
-    } catch (_) {}
-    applyFrequencies();
+    if (els.modesWrap || els.modesSolWrap) {
+      // Selection highlight spans BOTH groups — the binaural grid and the
+      // solfeggio grid share the same data-mode namespace.
+      const wraps = [els.modesWrap, els.modesSolWrap];
+      for (const wrap of wraps) {
+        try {
+          Array.prototype.forEach.call(
+            wrap && wrap.querySelectorAll ? wrap.querySelectorAll('button[data-mode]') : [],
+            (b) => { b.classList.toggle('active', b.dataset.mode === mode); }
+          );
+        } catch (_) {}
+      }
+    }
+    const f = activeFreqs();
+    // Solfeggio tones are equal-phase "pure tones": snap both oscillators to
+    // the carrier immediately (no click, no glide). Binaural modes keep the
+    // gentle 1.2 s sweep so the beat audibly glides into place.
+    applyFrequencies(f.left === f.right);
+    // Mirror the selection into the L/R sliders, number inputs and beat diff —
+    // a Solfeggio click therefore shows 963 / 963 with "Beat: 0 Hz (Pure Tone)".
+    syncFrangeUI();
     updateBeatInfo();
   }
 

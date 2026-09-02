@@ -294,8 +294,17 @@ function engineCoefficients(seed) {
       alpha: { l: 200, r: 210, ph: 1, k: 1 },
       beta:  { l: 200, r: 214, ph: 0, k: 1 },
       gamma: { l: 200, r: 240, ph: 3, k: 1 },
-      '432': { l: 432, r: 432, ph: 0, k: 1 },   // Solfeggio — equal-phase mono
+      // Full Solfeggio scale — equal-phase monaural pure tones
+      '174': { l: 174, r: 174, ph: 0, k: 1 },
+      '285': { l: 285, r: 285, ph: 0, k: 1 },
+      '396': { l: 396, r: 396, ph: 0, k: 1 },
+      '417': { l: 417, r: 417, ph: 0, k: 1 },
+      '432': { l: 432, r: 432, ph: 0, k: 1 },
       '528': { l: 528, r: 528, ph: 0, k: 1 },
+      '639': { l: 639, r: 639, ph: 0, k: 1 },
+      '741': { l: 741, r: 741, ph: 0, k: 1 },
+      '852': { l: 852, r: 852, ph: 0, k: 1 },
+      '963': { l: 963, r: 963, ph: 0, k: 1 },
     },
   };
 }

@@ -17,6 +17,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = '1.3.0';
 const CLIENT = join(ROOT, 'client');
 const OUT = join(ROOT, 'focus-bot-extension.zip');
+const OUT_STORE = join(ROOT, 'focus-bot-webstore-v' + VERSION + '.zip');
 
 // Production store files only — entry order matters for a deterministic archive.
 const ENTRIES = [
@@ -130,8 +131,10 @@ const entries = ENTRIES.map((f) => ({
 
 const archive = zip(entries);
 writeFileSync(OUT, archive);
+writeFileSync(OUT_STORE, archive);
 
 const total = entries.reduce((s, e) => s + e.data.length, 0);
 console.log(`[package] wrote ${OUT}`);
+console.log(`[package] ・ store artifact ${OUT_STORE}`);
 console.log(`[package] ${entries.length} files · ${total} bytes raw · ${archive.length} bytes archive`);
 console.log(`[package] contents: ${ENTRIES.join(', ')}`);

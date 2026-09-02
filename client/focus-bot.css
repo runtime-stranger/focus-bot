@@ -193,13 +193,25 @@
   border-radius: 50%;
   border: 0;
   cursor: pointer;
-  color: #06283d;
+  color: #0b192c;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #38bdf8, #818cf8);
   box-shadow: 0 8px 22px rgba(56, 189, 248, .4);
   transition: transform .18s ease;
+}
+/* Play/Pause icons — forced dark navy (#0b192c) to match the PRO badge text,
+   in BOTH the playing (pause bars) and paused (triangle) states. */
+#focus-bot-root #icon-play,
+#focus-bot-root #icon-pause,
+#focus-bot-root .play-icon,
+#focus-bot-root .p-icon,
+#focus-bot-root .play svg,
+#focus-bot-root .play path {
+  fill: #0b192c !important;
+  color: #0b192c !important;
+  stroke: #0b192c !important;
 }
 #focus-bot-root .play:hover {
   transform: scale(1.05);
@@ -386,6 +398,27 @@
 }
 #focus-bot-root .buy:hover {
   background: rgba(56, 189, 248, .26);
+}
+#focus-bot-root .btn-buy-pro {
+  background: linear-gradient(135deg, #4ba3ff 0%, #6385ff 50%, #8077ff 100%) !important;
+  color: #0b192c !important;
+  font-weight: 800 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.5px !important;
+  border: none !important;
+  border-radius: 9999px !important;
+  padding: 4px 14px !important;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(75, 163, 255, 0.4) !important;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+#focus-bot-root .btn-buy-pro:hover {
+  opacity: 0.9;
+  transform: scale(1.03);
+}
+#focus-bot-root .btn-buy-pro:active {
+  transform: scale(1.03);
+  opacity: 1;
 }
 
 /* ---- Overlay / Modal ---- */

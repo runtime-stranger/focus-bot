@@ -32,10 +32,27 @@
     .btn { flex: 1; border: 1px solid var(--line); background: var(--surf); color: var(--text);
       border-radius: 10px; padding: 9px 0; font-size: 12px; font-weight: 600; cursor: pointer; }
     .btn:hover { border-color: rgba(56,189,248,.5); }
-    .btn.primary { background: linear-gradient(135deg, var(--acc), var(--acc2)); border: 0; color: #06283d; }
+    .btn.primary { background: linear-gradient(135deg, var(--acc), var(--acc2)); border: 0; color: #0b192c; }
+    .btn.primary svg, .btn.primary svg path { fill: #0b192c !important; color: #0b192c !important; stroke: #0b192c !important; }
     .btn.active { border-color: var(--acc); color: var(--acc); }
+    .buy-pro {
+      width: 100%;
+      margin: 0 0 10px;
+      border: none !important;
+      background: linear-gradient(135deg, #4ba3ff 0%, #6385ff 50%, #8077ff 100%) !important;
+      color: #0b192c !important;
+      font-weight: 800 !important;
+      font-size: 11px !important;
+      letter-spacing: .5px !important;
+      padding: 4px 14px !important;
+      border-radius: 9999px !important;
+      cursor: pointer;
+      box-shadow: 0 0 8px rgba(75, 163, 255, 0.4) !important;
+      transition: opacity .15s ease, transform .15s ease;
+    }
+    .buy-pro:hover { opacity: .9; transform: scale(1.03); }
+    .buy-pro:active { transform: scale(1.03); opacity: 1; }
     .btns5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 8px; }
-    .btns2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-bottom: 8px; }
     .modes .btn { font-size: 11px; padding: 7px 0; }
     .vol-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
     .vol-row label.voltag { flex: none; width: 104px; margin: 0; letter-spacing: .5px; }
@@ -55,12 +72,14 @@
     <span class="pro-chip" id="pro-chip">PRO</span>
   </header>
 
+  <button type="button" class="buy-pro" id="buy-pro">Buy Pro</button>
+
   <div class="row">
     <button class="btn primary" id="btn-play">▶ Play</button>
     <button class="btn primary" id="btn-pause">⏸ Pause</button>
   </div>
 
-  <label>Mode</label>
+  <label>Binaural Waves</label>
   <div class="btns5 modes" id="modes">
     <button class="btn" data-mode="beta">Beta</button>
     <button class="btn" data-mode="alpha">Alpha</button>
@@ -68,15 +87,24 @@
     <button class="btn" data-mode="delta">Delta</button>
     <button class="btn" data-mode="gamma">Gamma</button>
   </div>
-  <div class="btns2 modes" id="modes-sol">
+  <label>Solfeggio Tones</label>
+  <div class="btns5 modes" id="modes-sol">
+    <button class="btn" data-mode="174">174Hz</button>
+    <button class="btn" data-mode="285">285Hz</button>
+    <button class="btn" data-mode="396">396Hz</button>
+    <button class="btn" data-mode="417">417Hz</button>
     <button class="btn" data-mode="432">432Hz</button>
     <button class="btn" data-mode="528">528Hz</button>
+    <button class="btn" data-mode="639">639Hz</button>
+    <button class="btn" data-mode="741">741Hz</button>
+    <button class="btn" data-mode="852">852Hz</button>
+    <button class="btn" data-mode="963">963Hz</button>
   </div>
 
   <label>Volume</label>
   <div class="vol-row">
     <label class="voltag">Binaural / Tone</label>
-    <input id="vol-tone" type="range" min="0" max="100" step="1" value="50">
+    <input id="vol-tone" type="range" min="0" max="200" step="1" value="100">
   </div>
   <div class="vol-row">
     <label class="voltag">Ambient Mixer</label>

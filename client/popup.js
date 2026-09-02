@@ -57,6 +57,7 @@
     play: $('btn-play'), pause: $('btn-pause'),
     modes: $('modes'), modesSol: $('modes-sol'), amb: $('amb'),
     volTone: $('vol-tone'), volAmb: $('vol-amb'),
+    buyPro: $('buy-pro'),
     pomo: $('btn-pomo'), pomoStop: $('btn-pomo-stop'),
     st: { state: $('st-state'), time: $('st-time'), trial: $('st-trial') },
     noWidget: $('no-widget'),
@@ -118,6 +119,7 @@
   }
 
   function bind() {
+    if (els.buyPro) els.buyPro.addEventListener('click', async () => { await send('openUpsell'); });
     els.play.addEventListener('click', async () => { await send('play'); refresh(); });
     els.pause.addEventListener('click', async () => { await send('pause'); refresh(); });
     els.pomo.addEventListener('click', async () => {

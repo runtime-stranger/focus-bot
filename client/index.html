@@ -83,7 +83,8 @@
     }
     .hero-cta:hover { transform: translateY(-2px); box-shadow: 0 0 60px rgba(108,92,231,.35); }
     .hero-cta:active { transform: scale(0.97); }
-    .hero-cta svg { width: 20px; height: 20px; fill: currentColor; }
+    .hero-cta svg { width: 20px; height: 20px; fill: #0b192c; }
+    .hero-cta svg path { fill: #0b192c !important; color: #0b192c !important; stroke: #0b192c !important; }
 
     /* ── WAVE SECTION ─────────────────────────────────── */
     section { padding: 100px 24px; max-width: 800px; margin: 0 auto; }
@@ -131,6 +132,52 @@
       padding: 3px 10px; border-radius: 999px;
       background: rgba(108,92,231,.1); color: var(--accent);
     }
+
+    /* ── FREQUENCY GUIDE ─────────────────────────────── */
+    .guide {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;
+    }
+    @media (max-width: 620px) { .guide { grid-template-columns: 1fr; } }
+    .guide-block {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 18px; padding: 22px 20px;
+    }
+    .guide-block h3 {
+      font-size: 13px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.4px; margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .guide-block h3 .ghash { width: 8px; height: 8px; border-radius: 50%; }
+    .guide-block.bw h3 { color: var(--accent2); }
+    .guide-block.bw h3 .ghash { background: var(--accent2); box-shadow: 0 0 10px rgba(0,180,216,.6); }
+    .guide-block.sg h3 { color: var(--accent); }
+    .guide-block.sg h3 .ghash { background: var(--accent); box-shadow: 0 0 10px rgba(108,92,231,.6); }
+    .guide-item {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+    }
+    .guide-item:last-child { border-bottom: 0; }
+    .guide-freq {
+      flex: none; min-width: 88px; text-align: center;
+      font-size: 11.5px; font-weight: 700; color: var(--text);
+      background: rgba(255,255,255,.05); border: 1px solid var(--border);
+      border-radius: 9px; padding: 5px 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .guide-freq small { display: block; font-size: 9px; font-weight: 500; color: var(--muted); }
+    .guide-txt { font-size: 12.5px; color: #a1a1aa; line-height: 1.55; }
+    .guide-txt b { color: var(--text); }
+    .guide-feats {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+      margin-top: 14px;
+    }
+    @media (max-width: 620px) { .guide-feats { grid-template-columns: 1fr; } }
+    .guide-feat {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px;
+      font-size: 12.5px; color: #a1a1aa;
+    }
+    .guide-feat b { display: block; color: var(--text); margin-bottom: 3px; font-size: 13px; }
 
     /* ── PRICING ──────────────────────────────────────── */
     .pricing-section { text-align: center; }
@@ -195,6 +242,7 @@
 <nav>
   <div class="logo"><span>●</span> FocusBot</div>
   <a href="#waves">Modes</a>
+  <a href="#guide">Frequency Guide</a>
 </nav>
 
 <!-- ── HERO ─────────────────────────────────────────────── -->
@@ -260,6 +308,92 @@
   </div>
 </section>
 
+<!-- ── FREQUENCY GUIDE ────────────────────────────────── -->
+<section id="guide">
+  <div class="section-label">Frequency Guide</div>
+  <h2 class="section-title">FocusBot Frequency Guide &amp; Focus Features</h2>
+  <p class="section-desc">Every frequency, its cognitive effect and the tools that keep you in the zone.</p>
+
+  <div class="guide">
+    <div class="guide-block bw">
+      <h3><span class="ghash"></span> Binaural Waves</h3>
+      <div class="guide-item">
+        <div class="guide-freq">Delta<small>100 / 102 Hz &middot; &Delta;2</small></div>
+        <div class="guide-txt"><b>Deep &amp; restorative sleep.</b> The slowest band; promotes physical recovery, deep relaxation and sleep preparation.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Theta<small>180 / 186 Hz &middot; &Delta;6</small></div>
+        <div class="guide-txt"><b>Creativity &amp; meditation.</b> The dreamy zone behind insight, imagination, light trance and emotional rewiring.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Alpha<small>200 / 210 Hz &middot; &Delta;10</small></div>
+        <div class="guide-txt"><b>Relaxed alertness &amp; learning.</b> Calm, receptive focus — ideal for absorbing new material and studying.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Beta<small>200 / 214 Hz &middot; &Delta;14</small></div>
+        <div class="guide-txt"><b>Active concentration.</b> The analytical, task-execution band for coding, writing and deep work.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">Gamma<small>200 / 240 Hz &middot; &Delta;40</small></div>
+        <div class="guide-txt"><b>Peak cognition.</b> The fastest band — pattern recognition, problem solving and high-level synthesis.</div>
+      </div>
+    </div>
+
+    <div class="guide-block sg">
+      <h3><span class="ghash"></span> Solfeggio Tones</h3>
+      <div class="guide-item">
+        <div class="guide-freq">174 Hz<small>Pain &amp; Stress</small></div>
+        <div class="guide-txt"><b>Pain &amp; stress reduction.</b> The lowest Solfeggio tone; supports physical relaxation and comfort.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">285 Hz<small>Regeneration</small></div>
+        <div class="guide-txt"><b>Tissue &amp; energy regeneration.</b> Used in sound healing to renew body and mind.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">396 Hz<small>Relief</small></div>
+        <div class="guide-txt"><b>Freeing guilt &amp; fear.</b> The "liberation" tone that clears emotional baggage.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">417 Hz<small>Change</small></div>
+        <div class="guide-txt"><b>Facilitating change.</b> Unblocks and resets, easing transitions and stagnation.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">432 Hz<small>Natural Tuning</small></div>
+        <div class="guide-txt"><b>Natural tuning &amp; mental calm.</b> A mathematically clean pitch that feels grounded and soothing.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">528 Hz<small>Transformation</small></div>
+        <div class="guide-txt"><b>Transformation &amp; deep mind.</b> The famous "miracle" tone — DNA repair lore and profound reset.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">639 Hz<small>Harmony</small></div>
+        <div class="guide-txt"><b>Communication &amp; harmony.</b> Connects, balances relationships and promotes understanding.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">741 Hz<small>Clarity</small></div>
+        <div class="guide-txt"><b>Mental clarity &amp; problem solving.</b> Detoxing noise — clears the mind for expression and reason.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">852 Hz<small>Intuition</small></div>
+        <div class="guide-txt"><b>Intuition &amp; awareness.</b> Awakens inner perception and strengthens presence.</div>
+      </div>
+      <div class="guide-item">
+        <div class="guide-freq">963 Hz<small>Higher Mind</small></div>
+        <div class="guide-txt"><b>Higher consciousness.</b> The "crown chakra" tone for transcendence and clear perception.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="guide-feats">
+    <div class="guide-feat"><b>Smart Pomodoro</b>25-minute focus phases perfectly synced to your sound.</div>
+    <div class="guide-feat"><b>Ambient Mixer</b>Pink, Brown, Rain &amp; White noise under the tones — now heard loud &amp; clear.</div>
+    <div class="guide-feat"><b>Independent Volumes</b>Separate sliders for the tone and the ambient bus.</div>
+    <div class="guide-feat"><b>528 Hz Crystal Chime</b>Each Pomodoro phase change rings a soft, synthesized 528 Hz bell.</div>
+    <div class="guide-feat"><b>Custom Range</b>Dial in any 0&ndash;1000 Hz binaural beat you want.</div>
+    <div class="guide-feat"><b>One-Time License</b>12&euro; once, 365 days, on-chain &amp; privacy-first.</div>
+  </div>
+</section>
+
 <!-- ── PRICING ──────────────────────────────────────────── -->
 <section class="pricing-section" id="pricing">
   <div class="section-label">Pricing</div>
@@ -272,7 +406,8 @@
     <div class="pricing-period">one-time &middot; pay with Bitcoin</div>
     <ul class="pricing-features">
       <li>Unlimited listening sessions</li>
-      <li>All 4 brainwave modes</li>
+      <li>All 15 frequency modes (5 binaural + full Solfeggio scale)</li>
+      <li>Pink / Brown / Rain / White ambient mixer</li>
       <li>Custom frequency range</li>
       <li>Priority support</li>
     </ul>
