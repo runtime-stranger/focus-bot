@@ -28,10 +28,10 @@ const ENTRIES = [
   'focus-bot.css',
   'popup.html',
   'popup.js',
-  'icons/16x16.png',
-  'icons/32x32.png',
-  'icons/48x48.png',
-  'icons/128x128.png',
+  'icons/icon-16.png',
+  'icons/icon-32.png',
+  'icons/icon-48.png',
+  'icons/icon-128.png',
   'privacy.html',
 ];
 

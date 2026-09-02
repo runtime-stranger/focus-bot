@@ -18,19 +18,19 @@
     "extension_pages": "script-src 'self'; object-src 'self'"
   },
   "icons": {
-    "16": "client/icons/16x16.png",
-    "32": "client/icons/32x32.png",
-    "48": "client/icons/48x48.png",
-    "128": "client/icons/128x128.png"
+    "16": "client/icons/icon-16.png",
+    "32": "client/icons/icon-32.png",
+    "48": "client/icons/icon-48.png",
+    "128": "client/icons/icon-128.png"
   },
   "action": {
     "default_title": "FocusBot",
     "default_popup": "client/popup.html",
     "default_icon": {
-      "16": "client/icons/16x16.png",
-      "32": "client/icons/32x32.png",
-      "48": "client/icons/48x48.png",
-      "128": "client/icons/128x128.png"
+      "16": "client/icons/icon-16.png",
+      "32": "client/icons/icon-32.png",
+      "48": "client/icons/icon-48.png",
+      "128": "client/icons/icon-128.png"
     }
   },
   "developer": {
