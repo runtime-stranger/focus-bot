@@ -1,9 +1,14 @@
 /*!
  * FocusBot icon generator — pure Node.js, zero dependencies.
- * Renders the official mark: blue gradient circle, light "FB" monogram and a
- * prominent orange radio-badge (device) at the bottom-right corner.
+ * Renders the official minimalist mark: a round blue gradient disc with a
+ * dark navy play triangle at its exact centre. No badge, no letters, nothing
+ * extra — the same geometry as the SVG template (viewBox 0 0 128 128):
+ *
+ *   <circle cx="64" cy="64" r="60" fill="url(#blueGrad)"/>
+ *   <polygon points="54,42 86,64 54,86" fill="#0b192c"/>
+ *
  * Each size is rasterised natively with 4x supersampled anti-aliasing so the
- * small 16px icon stays crisp (no downscaled blur).
+ * 16px icon stays crisp.
  *
  * Output (client/icons/): icon-16.png, icon-32.png, icon-48.png, icon-128.png
  *
@@ -45,112 +50,61 @@ function pngChunk(type, data) {
   return Buffer.concat([u32be(data.length), typeData, u32be(crc32(typeData))]);
 }
 
-/* ---- Color helpers ---- */
-const hexToRgb = (hex) => {
-  const v = parseInt(hex.replace('#', ''), 16);
-  return [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
+/* ---- Geometry (128 x 128 viewBox, same as the SVG template) ---- */
+const VB = 128;
+const CIRCLE = { cx: 64, cy: 64, r: 60 };
+const TRI = { /* polygon points="54,42 86,64 54,86" */
+  ax: 54, ay: 42,
+  bx: 86, by: 64,
+  cx: 54, cy: 86,
 };
+
+/* ---- Palette ---- */
+const BLUE_A = [0x4e, 0xa8, 0xff]; // #4ea8ff (gradient top-left)
+const BLUE_B = [0x7e, 0x8a, 0xff]; // #7e8aff (gradient bottom-right)
+const NAVY = [0x0b, 0x19, 0x2c];   // #0b192c play triangle
+
 const lerp = (a, b, t) => Math.round(a + (b - a) * t);
 const clamp = (t) => Math.min(1, Math.max(0, t));
 
-/* ---- Palette (full-contrast, not washed out) ---- */
-const C = {
-  blueA: hexToRgb('#4f9bff'),   // gradient start
-  blueB: hexToRgb('#6b7fff'),   // gradient end
-  rim:   hexToRgb('#3b6fe0'),   // circle edge (crisp contour)
-  oA:    hexToRgb('#ff9e45'),   // orange gradient start
-  oB:    hexToRgb('#ff6b00'),   // orange gradient end
-  oRim:  hexToRgb('#b24d00'),   // badge device ring
-  white: [255, 255, 255],
-};
-
-/* ---- "FB" 5x7 monogram: F (cols 0-4), gap (5), B (cols 6-10) ---- */
-const FONT_F = [
-  '11111', '10000', '11111', '10000', '10000', '10000', '10000',
-];
-const FONT_B = [
-  '11110', '10001', '10001', '11110', '10001', '10001', '11110',
-];
-
-/* Design geometry (normalized 0..1 of the icon size) */
-const GEO = {
-  cx: 0.5, cy: 0.52,            // circle centre (slightly above centre)
-  R: 0.43,                      // circle radius
-  glyphW: 0.58,                 // whole "FB" canvas width
-  // orange radio badge at bottom-right
-  bx: 0.775, by: 0.775, bR: 0.135,
-  dot: { x: 0.685, y: 0.775, r: 0.022 },
-  arcs: [
-    { r1: 0.075, r2: 0.100 },
-    { r1: 0.112, r2: 0.124 },
-  ],
-};
-
-const GLYPH_NC = 11, GLYPH_NR = 7;
-const GLYPH_CELL = GEO.glyphW / GLYPH_NC;
-const glyphTop = GEO.cy - (GLYPH_CELL * GLYPH_NR) / 2;
-const glyphLeft = GEO.cx - GEO.glyphW / 2;
-
-function insideFB(u, v) {
-  const col = Math.floor((u - glyphLeft) / GLYPH_CELL);
-  const row = Math.floor((v - glyphTop) / GLYPH_CELL);
-  if (col < 0 || col >= GLYPH_NC || row < 0 || row >= GLYPH_NR) return false;
-  if (col === 5) return false;
-  const glyph = col < 5 ? FONT_F : FONT_B;
-  return glyph[row][col % 5] === '1';
+/** Point-in-triangle (same winding convention as SVG polygon). */
+function inTriangle(x, y, ax, ay, bx, by, cx, cy) {
+  const d1 = (x - bx) * (ay - by) - (ax - bx) * (y - by);
+  const d2 = (x - cx) * (by - cy) - (bx - cx) * (y - cy);
+  const d3 = (x - ax) * (cy - ay) - (cx - ax) * (y - ay);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
 }
 
-/** Sample one fine subsample; returns [r, g, b, a]. */
+/** Sample one fine subsample (viewBox coordinates); returns [r, g, b, a]. */
 function sample(u, v) {
-  const d = Math.hypot(u - GEO.cx, v - GEO.cy);
+  const dx = u - CIRCLE.cx, dy = v - CIRCLE.cy;
+  const d = Math.hypot(dx, dy);
+  if (d > CIRCLE.r) return [0, 0, 0, 0]; // outside the disc → transparent
 
-  // White radio motif (dot + arcs) — drawn above everything inside the badge
-  const bdx = u - GEO.bx, bdy = v - GEO.by;
-  const bd = Math.hypot(bdx, bdy);
-  const angleOK = bdx >= 0.5 * bd; // horizontal ±60°, waves radiate right
-  const inArc = GEO.arcs.some(({ r1, r2 }) => angleOK && bd > r1 && bd < r2);
-  const inDot = Math.hypot(u - GEO.dot.x, v - GEO.dot.y) <= GEO.dot.r;
-  if (inArc || inDot) return [...C.white, 255];
-
-  // Orange badge (device) with a dark ring for contour
-  if (bd <= GEO.bR) {
-    const t = clamp((bdx / GEO.bR + bdy / GEO.bR + 2) / 4);
-    return [lerp(C.oA[0], C.oB[0], t), lerp(C.oA[1], C.oB[1], t), lerp(C.oA[2], C.oB[2], t), 255];
-  }
-  if (bd <= GEO.bR + 0.012) {
-    const a = Math.round(255 * clamp(1 - (bd - GEO.bR) / 0.012));
-    return [...C.oRim, a];
+  // Play triangle sits on top of the gradient
+  if (inTriangle(u, v, TRI.ax, TRI.ay, TRI.bx, TRI.by, TRI.cx, TRI.cy)) {
+    return [...NAVY, 255];
   }
 
-  // Outer border of the whole canvas → transparent
-  if (d > 0.47) return [0, 0, 0, 0];
-  // Circle contour (dark rim) for a crisp, non-pale edge
-  if (d > 0.443) {
-    const a = Math.round(255 * clamp(1 - (d - 0.443) / 0.027));
-    return [...C.rim, a];
-  }
-  if (d > GEO.R) return [...C.rim, 255];
-
-  // Blue gradient body (top-left → bottom-right for a soft 135° feel)
-  const t = clamp((u + v) / 2);
-  const rgb = [lerp(C.blueA[0], C.blueB[0], t), lerp(C.blueA[1], C.blueB[1], t), lerp(C.blueA[2], C.blueB[2], t)];
-
-  // Light "FB" monogram
-  if (insideFB(u, v)) return [...C.white, 255];
-  return [...rgb, 255];
+  // Round blue gradient disc, top-left → bottom-right
+  const t = clamp((u + v) / (2 * CIRCLE.cx));
+  return [lerp(BLUE_A[0], BLUE_B[0], t), lerp(BLUE_A[1], BLUE_B[1], t), lerp(BLUE_A[2], BLUE_B[2], t), 255];
 }
 
 /* ---- Render one size (4x supersampled AA) ---- */
 function renderIcon(size) {
+  const scale = size / VB;
   const px = Buffer.alloc(size * size * 4);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       let r = 0, g = 0, b = 0, a = 0;
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
-          const u = (x + (sx + 0.5) / SS) / size;
-          const v = (y + (sy + 0.5) / SS) / size;
-          const c = sample(u, v);
+          const vbx = (x + (sx + 0.5) / SS) / scale;
+          const vby = (y + (sy + 0.5) / SS) / scale;
+          const c = sample(vbx, vby);
           r += c[0]; g += c[1]; b += c[2]; a += c[3];
         }
       }
@@ -192,4 +146,4 @@ for (const size of SIZES) {
   writeFileSync(out, png);
   console.log(`[gen-icons] ${out} → ${png.length} bytes`);
 }
-console.log('[gen-icons] Done — blue circle + FB + orange radio badge rendered.');
+console.log('[gen-icons] Done — minimalist blue disc + dark play triangle rendered.');
