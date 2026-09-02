@@ -3124,6 +3124,45 @@ async function webstoreComplianceScenarios() {
       env.restore();
     }
   });
+
+  /* ---- SCENARIO 78 ---- */
+  await scenario('78. Real-time 1-year expiry: when the 365-day window passes, Pro is revoked, storage flagged as expired and the renew modal reopens', async () => {
+    const env = installClientEnv();
+    env.ls._clear();
+    // Server grants a PRO license whose window is ~700ms away (simulates a
+    // license that was activated 364.99 days ago).
+    env.ls.setItem('focusbot.licenseKey', 'FOCUS-PRO-YEAR1');
+    env.G.fetch = async (url) => {
+      if (String(url).includes('/api/verify-license')) {
+        return { ok: true, status: 200, json: async () => ({ valid: true, plan: 'pro', expiresAt: Date.now() + 700 }) };
+      }
+      throw new Error('unexpected');
+    };
+    const c = await freshClient(env);
+    const fb = c.FocusBot;
+    await waitFor(() => fb.isPro === true, 2000, 'pro activated within 1-year window');
+
+    // Activated state persists the full expiry metadata (needed for offline enforcement)
+    expectEqual(env.ls.getItem('focusbot.isPro'), 'true', 'isPro persisted on activation');
+    expectTrue(Number(env.ls.getItem('focusbot.expiresAt')) > Date.now(), 'expiresAt persisted as a future epoch on activation');
+    expectEqual(c.stub('.quota').textContent, 'PRO · 1 days left', 'timed license footer shows days remaining');
+
+    // Let the 365-day window lapse
+    await sleep(900);
+
+    expectEqual(fb.isPro, true, 'pro still flagged before a trigger checks the window');
+
+    // Every feature trigger (here: play) enforces the expiry in real time
+    fb.play();
+    await sleep(20);
+
+    expectEqual(fb.isPro, false, 'pro revoked the instant the window passes');
+    expectEqual(fb.getState().licenseExpired, true, 'getState exposes licenseExpired flag');
+    expectEqual(fb.getState().proDaysLeft, 0, 'getState exposes 0 days remaining');
+    expectEqual(env.ls.getItem('focusbot.isPro'), 'false', 'local storage downgraded to isPro=false');
+    expectEqual(env.ls.getItem('focusbot.licenseExpired'), 'true', 'local storage flagged licenseExpired=true');
+    expectEqual(c.stub('.overlay').hidden, false, 'renew-modal reopened after expiry');
+  });
 }
 console.log(`
 ${C.b}${C.B}FocusBot Automated Test Suite${C.x}

@@ -138,7 +138,7 @@
       : '—';
     const t = state.trial;
     els.st.trial.textContent = state.pro
-      ? 'PRO · Unlimited'
+      ? (state.expiresAt ? 'PRO · ' + Math.max(0, Math.ceil((state.expiresAt - Date.now()) / 86400000)) + ' days left' : 'PRO · Unlimited')
       : (t && t.active ? fmtTrial(t.remainingMs) + ' left' : 'Expired');
   }
 

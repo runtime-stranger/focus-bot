@@ -87,6 +87,7 @@
    * 1) CONSTANTS
    * ======================================================================== */
   const MASTER_GAIN_MAX = 0.40;                     // Master slider ceiling — the full chain (boost 6 × channels 1.5 × master 0.40) lands at ≈3.6× loudness; peaks are clamped by the final compressor
+  const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;    // Pro licenses: 365 days of access
   const BOOST_GAIN = 6.0;                           // Pre-amp boost (effective max = 0.6)
   const DEFAULT_VOLUME = 0.7;
   const SWEEP_SEC = 1.2;                            // Frequency sweep on mode switch
@@ -175,6 +176,9 @@
     volAmbient: 'focusbot.volAmbient',      // "Ambient Mixer" slider (0..1)
     isPro: 'focusbot.isPro',                // persisted license state (multi-device)
     licenseType: 'focusbot.licenseType',    // 'unlimited' | 'pro'
+    activatedAt: 'focusbot.activatedAt',    // licence start epoch → billing month
+    expiresAt: 'focusbot.expiresAt',        // 365-day expiry (null for unlimited)
+    licenseExpired: 'focusbot.licenseExpired', // monotone "needs renewal" flag
   };
 
   /** Storage adapter: chrome.storage.local when present (extension), else
@@ -228,6 +232,7 @@
 
     pro: false,
     proExpiresAt: null,
+    licenseExpired: false,
     verifying: false,
 
     /* 3-day frictionless trial (first run stamps LS.trialStart) */
@@ -502,6 +507,14 @@
 
   function startPlayback() {
     if (STATE.playing) return;
+    // Real-time licence expiry: a PRO session whose 365-day window just passed
+    // is revoked and the renew modal reopens before any sound can start.
+    if (licenseExpiredNow()) {
+      checkLicenseExpiry(true);
+      toast('Pro license expired. Renew for another 365 days.', 'error');
+      updatePlayingUI();
+      return;
+    }
     if (!hasAccess()) {
       if (STATE.trialStart) {
         toast('3-day trial ended. Activate Pro to keep listening.', 'error');
@@ -590,16 +603,24 @@
     return null;
   }
 
-  /** Persist an unlocked license across local + (when present) Chrome Sync. */
-  function persistLicense(key, kind) {
+  /** Persist an unlocked license across local + (when present) Chrome Sync.
+   *  Timed 1-year licenses store their activatesAt/expiresAt so the client can
+   *  enforce the 365-day window offline; the unlimited key stores expiresAt=null. */
+  function persistLicense(key, kind, expiresAt, activatedAt) {
+    const at = activatedAt || Date.now();
+    const ex = expiresAt || null;
     try {
       localStorage.setItem(LS.key, key);
-      localStorage.setItem(LS.verifiedAt, String(Date.now()));
+      localStorage.setItem(LS.verifiedAt, String(at));
       localStorage.setItem(LS.isPro, 'true');
       localStorage.setItem(LS.licenseType, kind || 'pro');
+      localStorage.setItem(LS.activatedAt, String(at));
+      if (ex) localStorage.setItem(LS.expiresAt, String(ex));
+      else localStorage.removeItem(LS.expiresAt);
+      localStorage.removeItem(LS.licenseExpired);
     } catch (_) {}
     if (!hasChromeStorage()) return;
-    const payload = { isPro: true, licenseType: kind || 'pro', licenseKey: key };
+    const payload = { isPro: true, licenseType: kind || 'pro', licenseKey: key, activatedAt: at, expiresAt: ex, licenseExpired: false };
     try { chrome.storage.local.set(payload); } catch (_) {}
     try { if (chrome.storage && chrome.storage.sync) chrome.storage.sync.set(payload); } catch (_) {}
   }
@@ -634,23 +655,29 @@
       }
       const data = await verifyLicense(key);
       if (data && data.valid) {
+        const now = Date.now();
+        // Real-time 1-year window: the server may supply its own expiresAt
+        // (worker grants now + 365 days); fall back to a local computation.
+        const expiresAt = Number(data.expiresAt) || (now + ONE_YEAR_MS);
         STATE.pro = true;
-        STATE.proExpiresAt = data.expiresAt || null;
+        STATE.proExpiresAt = expiresAt;
+        STATE.licenseExpired = false;
         // The audio coefficients only materialize from a successful verification
         STATE.engine = decodeEngineToken(data.engine);
-        try {
-          localStorage.setItem(LS.key, key);
-          localStorage.setItem(LS.verifiedAt, String(Date.now()));
-        } catch (_) {}
+        persistLicense(key, 'pro', expiresAt, now);
         renderLicenseUI(true);
-        if (!silent) toast('Pro activated! Unlimited listening unlocked.', 'success');
+        if (!silent) toast('Pro activated! 365 days of access unlocked.', 'success');
+        // Guard: a server edge case with an already-past expiresAt must not
+        // leave a live flag lying around — downgrade + renewal modal instead.
+        if (Date.now() > expiresAt) { checkLicenseExpiry(true); return false; }
         return true;
       }
       // Server says invalid -> revoke Pro immediately
       STATE.pro = false;
       STATE.proExpiresAt = null;
+      STATE.licenseExpired = false;
       STATE.engine = null;
-      try { localStorage.removeItem(LS.key); } catch (_) {}
+      try { localStorage.removeItem(LS.key); localStorage.removeItem(LS.expiresAt); localStorage.removeItem(LS.activatedAt); } catch (_) {}
       renderLicenseUI(false);
       if (STATE.playing) pausePlayback();
       if (!silent) toast('Invalid or expired license key.', 'error');
@@ -659,8 +686,9 @@
       // Network error -> revoke Pro (server unreachable = cannot confirm license)
       STATE.pro = false;
       STATE.proExpiresAt = null;
+      STATE.licenseExpired = false;
       STATE.engine = null;
-      try { localStorage.removeItem(LS.key); } catch (_) {}
+      try { localStorage.removeItem(LS.key); localStorage.removeItem(LS.expiresAt); localStorage.removeItem(LS.activatedAt); } catch (_) {}
       renderLicenseUI(false);
       if (STATE.playing) pausePlayback();
       if (!silent) toast('Verification service unreachable.', 'error');
@@ -693,6 +721,12 @@
     if (anyKey) {
       applyLicense(anyKey, { silent: true });
     }
+    // Boot-time expiry enforcement: an already-past 365-day window downgrades
+    // Pro and reopens the renewal modal on open.
+    if (licenseExpiredNow()) {
+      checkLicenseExpiry(true);
+      toast('Pro license expired. Renew for another 365 days.', 'error');
+    }
   }
 
   /* ==========================================================================
@@ -701,6 +735,11 @@
 
   /** Licensed Pro OR within the 72h trial window → sound is unlocked. */
   function hasAccess() {
+    // Real-time 365-day gate: the instant the license window passes, Pro is
+    // downgraded (storage updated) so every feature trigger hits the paywall.
+    if (licenseExpiredNow()) {
+      if (checkLicenseExpiry(false)) toast('Pro license expired. Renew for another 365 days.', 'error');
+    }
     return STATE.pro || trialActive();
   }
   function trialActive() {
@@ -717,6 +756,41 @@
   function fmtTrialRemaining() {
     const h = Math.max(1, Math.ceil(trialRemainingMs() / 3600000));
     return h >= 24 ? Math.floor(h / 24) + ' g\u00fcn' : h + ' saat';
+  }
+
+  /** Whole days of PRO access remaining (null = unlimited / no expiry). */
+  function proDaysLeft() {
+    if (!STATE.proExpiresAt) return null;
+    return Math.max(0, Math.ceil((STATE.proExpiresAt - Date.now()) / 86400000));
+  }
+
+  /** True exactly when a PRO license has passed its 365-day window. */
+  function licenseExpiredNow() {
+    return !!(STATE.pro && STATE.proExpiresAt && Date.now() > STATE.proExpiresAt);
+  }
+
+  /** Enforce license expiry: downgrade to restricted mode, update storage and —
+   *  when asked — reopen the "License Required — Renew for 365 Days" modal. */
+  function checkLicenseExpiry(openRenewal) {
+    if (!licenseExpiredNow()) return false;
+    STATE.pro = false;
+    STATE.proExpiresAt = null;
+    STATE.licenseExpired = true;
+    try {
+      localStorage.setItem(LS.isPro, 'false');
+      localStorage.setItem(LS.licenseType, 'pro');
+      localStorage.setItem(LS.licenseExpired, 'true');
+    } catch (_) {}
+    if (hasChromeStorage()) {
+      const payload = { isPro: false, licenseExpired: true, licenseType: 'pro' };
+      try { chrome.storage.local.set(payload); } catch (_) {}
+      try { if (chrome.storage && chrome.storage.sync) chrome.storage.sync.set(payload); } catch (_) {}
+    }
+    if (STATE.playing) pausePlayback();
+    renderLicenseUI(false);
+    updateFooter();
+    if (openRenewal) { updateRenewalModal(); openUpsell(); }
+    return true;
   }
 
   /** Boot: restore persisted volumes + stamp the trial start on first run. */
@@ -750,6 +824,16 @@
     updateFooter();
     openUpsell();
     toast('3-day trial ended. Activate Pro to keep listening.', 'error');
+  }
+
+  /** Same timer, license side: the moment the 365-day window passes while the
+   *  widget is open, Pro is dropped, storage is flagged and the renew modal
+   *  reopens — without needing a reload. */
+  function licenseWatchdog() {
+    if (!licenseExpiredNow()) return;
+    checkLicenseExpiry(true);
+    toast('Pro license expired. Renew for another 365 days.', 'error');
+    updatePlayingUI();
   }
 
   /* ==========================================================================
@@ -1237,7 +1321,8 @@
 
   function updateFooter() {
     if (STATE.pro) {
-      els.quota.textContent = 'PRO \u00B7 Unlimited';
+      const days = proDaysLeft();
+      els.quota.textContent = days == null ? 'PRO \u00B7 Unlimited' : 'PRO \u00B7 ' + days + ' days left';
     } else if (trialActive()) {
       // Living countdown badge — the trial is the default every user sees.
       els.quota.textContent = 'Deneme: ' + fmtTrialRemaining() + ' kald\u0131';
@@ -1264,7 +1349,18 @@
     try { els.dot.classList.toggle('on', !!active); } catch (_) {}
   }
 
+  /** Retitle the modal for an expired license → "License Required — Renew for
+   *  365 Days"; the generic title is kept for trial/first-activation. */
+  function updateRenewalModal() {
+    if (STATE.licenseExpired && els.mTitle) {
+      els.mTitle.textContent = 'License Required \u2014 Renew for 365 Days';
+    }
+  }
+
   function openUpsell() {
+    if (STATE.licenseExpired && els.mTitle) {
+      els.mTitle.textContent = 'License Required \u2014 Renew for 365 Days';
+    }
     els.btcAddr.textContent = CONFIG.btcAddress;
     // Show a placeholder while fetching live pricing
     els.btcPrice.textContent = '12 \u20AC \u00B7 loading\u2026';
@@ -1665,6 +1761,7 @@
     ambRow: $('.amb-row'),
 
     overlay: $('.overlay'),
+    mTitle: $('#fb-m-title') || $('.modal h3'),
     closeModal: $('.modal-close'),
     btcBox: $('#fb-btc-box'), btcPrice: $('.btc-price'),
     btcAddr: $('#fb-btc-address') || $('.btc-addr'),
@@ -1895,6 +1992,8 @@
         completed: STATE.pomodoro.completed,
       },
       expiresAt: STATE.proExpiresAt,
+      proDaysLeft: STATE.licenseExpired ? 0 : proDaysLeft(),
+      licenseExpired: STATE.licenseExpired,
     };
   }
 
@@ -2122,9 +2221,10 @@
   bootstrapState();
 
   // Mid-session expiry watchdog — a running session locks the instant the
-  // 72h window passes, without needing a reload.
+  // 72h window passes; the license equivalent enforces the 365-day Pro window.
   try {
     setInterval(trialWatchdog, TRIAL_CHECK_MS);
+    setInterval(licenseWatchdog, TRIAL_CHECK_MS);
   } catch (_) {}
 
   bootVerify();            // server-side license verification on every page load
