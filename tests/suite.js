@@ -3043,6 +3043,87 @@ async function webstoreComplianceScenarios() {
       expectEqual(kv.puts.length, 0, 'master flow never touched KV (no replay record)');
     } finally { env.restore(); }
   });
+
+  /* ---- SCENARIO 76 ---- */
+  await scenario('76. Offline multi-device: master key FOCUS-PRO-4YF4SA5M activates PRO · Unlimited with ZERO network calls, chrome.storage.local + sync written', async () => {
+    const env = installClientEnv();
+    const localStore = new Map();
+    const syncStore = new Map();
+    const chromeStub = {
+      storage: {
+        local: {
+          get(keys, cb) { const out = {}; for (const k of (Array.isArray(keys) ? keys : Object.keys(keys || {}))) out[k] = localStore.get(k); cb(out); },
+          set(obj) { for (const k of Object.keys(obj || {})) localStore.set(k, obj[k]); },
+        },
+        sync: {
+          get(keys, cb) { const out = {}; for (const k of (Array.isArray(keys) ? keys : Object.keys(keys || {}))) out[k] = syncStore.get(k); cb(out); },
+          set(obj) { for (const k of Object.keys(obj || {})) syncStore.set(k, obj[k]); },
+        },
+      },
+    };
+    const savedChrome = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
+    Object.defineProperty(globalThis, 'chrome', { value: chromeStub, writable: true, configurable: true });
+    try {
+      env.ls._clear();
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      expectEqual(fb.isPro, false, 'starts unlicensed');
+
+      // Default test fetch throws on ANY unexpected call → if applyLicense hit
+      // the worker, the scenario would crash. A green run proves zero network.
+      c.stub('#fb-license-input').value = 'FOCUS-PRO-4YF4SA5M';
+      for (const fn of (c.stub('#fb-activate-btn').handlers.click || [])) fn();
+      await waitFor(() => fb.isPro === true, 2000, 'offline master activation');
+      expectEqual(env.ls.getItem('focusbot.licenseKey'), 'FOCUS-PRO-4YF4SA5M', 'key persisted locally');
+      expectEqual(env.ls.getItem('focusbot.isPro'), 'true', 'isPro persisted locally');
+      expectEqual(env.ls.getItem('focusbot.licenseType'), 'unlimited', 'licenseType=unlimited persisted locally');
+      expectEqual(c.stub('.quota').textContent, 'PRO · Unlimited', 'footer shows PRO · Unlimited');
+
+      expectEqual(localStore.get('isPro'), true, 'chrome.storage.local isPro');
+      expectEqual(localStore.get('licenseType'), 'unlimited', 'chrome.storage.local licenseType');
+      expectEqual(localStore.get('licenseKey'), 'FOCUS-PRO-4YF4SA5M', 'chrome.storage.local licenseKey');
+      expectEqual(syncStore.get('isPro'), true, 'chrome.storage.sync isPro (Chrome Sync propagation)');
+      expectEqual(syncStore.get('licenseKey'), 'FOCUS-PRO-4YF4SA5M', 'chrome.storage.sync licenseKey');
+    } finally {
+      if (savedChrome) Object.defineProperty(globalThis, 'chrome', savedChrome);
+      else delete globalThis.chrome;
+      env.restore();
+    }
+  });
+
+  /* ---- SCENARIO 77 ---- */
+  await scenario('77. Multi-device via Chrome Sync: fresh device with empty local storage auto-activates the unlimited key on boot (no server query)', async () => {
+    const env = installClientEnv();
+    const localStore = new Map();
+    const syncStore = new Map([['focusbot.licenseKey', 'FOCUS-PRO-4YF4SA5M']]); // synced from another device
+    const chromeStub = {
+      storage: {
+        local: {
+          get(keys, cb) { const out = {}; for (const k of (Array.isArray(keys) ? keys : Object.keys(keys || {}))) out[k] = localStore.get(k); cb(out); },
+          set(obj) { for (const k of Object.keys(obj || {})) localStore.set(k, obj[k]); },
+        },
+        sync: {
+          get(keys, cb) { const out = {}; for (const k of (Array.isArray(keys) ? keys : Object.keys(keys || {}))) out[k] = syncStore.get(k); cb(out); },
+          set(obj) { for (const k of Object.keys(obj || {})) syncStore.set(k, obj[k]); },
+        },
+      },
+    };
+    const savedChrome = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
+    Object.defineProperty(globalThis, 'chrome', { value: chromeStub, writable: true, configurable: true });
+    try {
+      env.ls._clear(); // completely fresh device — empty local storage
+      const c = await freshClient(env);
+      const fb = c.FocusBot;
+      await waitFor(() => fb.isPro === true, 2000, 'boot picks up sync key and activates offline');
+      expectEqual(env.ls.getItem('focusbot.licenseKey'), 'FOCUS-PRO-4YF4SA5M', 'sync key mirrored into local storage');
+      expectEqual(c.stub('.quota').textContent, 'PRO · Unlimited', 'footer shows PRO · Unlimited');
+      expectEqual(fb.isPro, true, 'Pro unlocked without any network call');
+    } finally {
+      if (savedChrome) Object.defineProperty(globalThis, 'chrome', savedChrome);
+      else delete globalThis.chrome;
+      env.restore();
+    }
+  });
 }
 console.log(`
 ${C.b}${C.B}FocusBot Automated Test Suite${C.x}

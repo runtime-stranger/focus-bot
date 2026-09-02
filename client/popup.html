@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>FocusBot</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -18,6 +18,7 @@
     }
     body {
       width: 320px;
+      min-width: 320px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
       background: var(--bg); color: var(--text);
       padding: 14px 14px 16px;
@@ -63,6 +64,27 @@
     .status b { color: var(--text); font-variant-numeric: tabular-nums; }
     .note { font-size: 11px; color: var(--muted); text-align: center; padding: 12px 0 2px; }
     .hidden { display: none !important; }
+
+    /* ── Responsive / touch-friendly (≤ 640px) ─────────────── */
+    @media (max-width: 640px) {
+      body { width: 100%; max-width: 480px; margin: 0 auto; }
+      .btn { min-height: 40px; }
+      .buy-pro { min-height: 44px; }
+      .btns5.modes { grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); }
+      .modes .btn { min-height: 40px; }
+      .vol-row { min-height: 44px; }
+      .vol-row input[type=range] {
+        -webkit-appearance: none; appearance: none;
+        min-height: 44px; height: 44px; flex: 1;
+        background: linear-gradient(90deg, var(--acc), var(--acc2));
+        border-radius: 999px; cursor: pointer; outline: none;
+      }
+      .vol-row input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none;
+        width: 18px; height: 18px; border-radius: 50%;
+        background: #fff; border: 1px solid rgba(0, 0, 0, .25); cursor: pointer;
+      }
+    }
   </style>
 </head>
 <body>

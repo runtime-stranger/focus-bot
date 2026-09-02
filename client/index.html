@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>FocusBot — Neural Sound Waves for Deep Focus</title>
   <meta name="description" content="Binaural beat technology for deep focus, learning, creativity, and problem solving." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -233,6 +233,19 @@
         linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
       background-size: 60px 60px;
+    }
+
+    /* ── Responsive / touch-friendly (≤ 640px) ─────────── */
+    @media (max-width: 640px) {
+      nav { padding: 12px 18px; }
+      .hero { padding: 100px 16px 60px; min-height: 90vh; }
+      .hero p { font-size: 15px; }
+      .hero .hero-cta { width: 100%; max-width: 480px; margin: 0 auto; justify-content: center; }
+      section { padding: 72px 16px; }
+      .guide-freq { min-width: 70px; }
+      .pricing-card { padding: 32px 20px; }
+      .pricing-amount { font-size: 40px; }
+      footer { padding: 32px 16px; }
     }
   </style>
 </head>

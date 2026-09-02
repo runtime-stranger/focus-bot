@@ -173,6 +173,8 @@
     trialStart: 'focusbot.trialStart',      // first-run epoch → 72h trial window
     volBinaural: 'focusbot.volBinaural',    // "Binaural / Tone" slider (0..1)
     volAmbient: 'focusbot.volAmbient',      // "Ambient Mixer" slider (0..1)
+    isPro: 'focusbot.isPro',                // persisted license state (multi-device)
+    licenseType: 'focusbot.licenseType',    // 'unlimited' | 'pro'
   };
 
   /** Storage adapter: chrome.storage.local when present (extension), else
@@ -571,7 +573,37 @@
 
   /* ==========================================================================
    * 3) LICENSE VERIFICATION (/api/verify-license)
-   * ======================================================================== */
+   * ========================================================================
+   * Deterministic LOCAL activation — multi-device, offline-first. The designated
+   * unlimited key(s) are validated purely on-device: no server query, no device
+   * limit, no hardware fingerprint. The license state is mirrored to BOTH
+   * chrome.storage.local and chrome.storage.sync ({isPro, licenseType,
+   * licenseKey}) so a second device picks it up automatically via Chrome Sync.
+   * All other keys still go through the worker, which keeps purchased Pro
+   * licenses cryptographically verifiable without any device binding. */
+  const UNLIMITED_KEYS = ['FOCUS-PRO-4YF4SA5M'];
+
+  /** Returns 'unlimited' for a designated local key, else null. */
+  function localLicenseKind(key) {
+    const k = String(key || '').toUpperCase();
+    if (UNLIMITED_KEYS.indexOf(k) !== -1) return 'unlimited';
+    return null;
+  }
+
+  /** Persist an unlocked license across local + (when present) Chrome Sync. */
+  function persistLicense(key, kind) {
+    try {
+      localStorage.setItem(LS.key, key);
+      localStorage.setItem(LS.verifiedAt, String(Date.now()));
+      localStorage.setItem(LS.isPro, 'true');
+      localStorage.setItem(LS.licenseType, kind || 'pro');
+    } catch (_) {}
+    if (!hasChromeStorage()) return;
+    const payload = { isPro: true, licenseType: kind || 'pro', licenseKey: key };
+    try { chrome.storage.local.set(payload); } catch (_) {}
+    try { if (chrome.storage && chrome.storage.sync) chrome.storage.sync.set(payload); } catch (_) {}
+  }
+
   async function verifyLicense(key) {
     const res = await fetch(CONFIG.endpoint + '/api/verify-license', {
       method: 'POST',
@@ -588,6 +620,18 @@
     if (STATE.verifying) return false;
     STATE.verifying = true;
     try {
+      // Offline-first: a designated unlimited key activates INSTANTLY on ANY
+      // device — fully deterministic, zero network, no device/hardware limits.
+      const kind = localLicenseKind(key);
+      if (kind) {
+        STATE.pro = true;
+        STATE.proExpiresAt = null;           // unlimited — never expires
+        STATE.engine = null;                 // stock hearing-safe frequency matrix
+        persistLicense(key, kind);
+        renderLicenseUI(true);
+        if (!silent) toast('Pro activated! Unlimited listening unlocked.', 'success');
+        return true;
+      }
       const data = await verifyLicense(key);
       if (data && data.valid) {
         STATE.pro = true;
@@ -629,9 +673,22 @@
     }
   }
 
-  function bootVerify() {
+  async function bootVerify() {
     let savedKey = null;
     try { savedKey = localStorage.getItem(LS.key); } catch (_) {}
+    // Multi-device: a license activated on another device follows the user via
+    // Chrome Sync — pull it in when this device's local storage is empty.
+    if (!savedKey && hasChromeStorage() && chrome.storage && chrome.storage.sync) {
+      try {
+        const synced = await new Promise((resolve) => {
+          try { chrome.storage.sync.get([LS.key], (v) => resolve(v || {})); } catch (_) { resolve({}); }
+        });
+        if (synced && synced[LS.key]) {
+          savedKey = synced[LS.key];
+          try { localStorage.setItem(LS.key, savedKey); } catch (_) {}
+        }
+      } catch (_) {}
+    }
     const anyKey = savedKey || CONFIG.apiKey;
     if (anyKey) {
       applyLicense(anyKey, { silent: true });
@@ -1431,6 +1488,17 @@
     'font-size:12px;line-height:1.5;color:#ebebf5;background:rgba(30,32,40,.85);border:1px solid rgba(255,255,255,.12);' +
     'border-left-width:3px;border-left-color:#38bdf8;box-shadow:0 12px 32px rgba(0,0,0,.5);animation:fb-pop .3s ease}' +
   '.toast.success{border-left-color:#34d399}.toast.error{border-left-color:#f87171}' +
+
+  /* ---- Responsive / touch-friendly (≤ 640px) ---- */
+  '@media(max-width:640px){' +
+    '.panel{width:calc(100vw - 24px);max-width:480px;right:12px;min-width:0}' +
+    '.modes{grid-template-columns:repeat(auto-fit,minmax(80px,1fr))}' +
+    '.modes.modes-sol{grid-template-columns:repeat(auto-fit,minmax(80px,1fr))}' +
+    '.modes button{min-height:40px}' +
+    '.frange-reset{width:28px;height:28px}' +
+    '.fr-sl{height:4px}.fr-sl::-webkit-slider-thumb{width:18px;height:18px}' +
+    '.vol input[type=range]{min-height:44px;height:44px}.vol input[type=range]::-webkit-slider-thumb{width:18px;height:18px}' +
+  '}' +
 '</style>' +
 
 '<button id="fb-fab" class="fab" aria-label="Open FocusBot">' +
@@ -1684,6 +1752,23 @@
     els.fab.addEventListener('touchstart', onDragStart, { passive: true });
     els.fab.addEventListener('click', function (e) {
       if (touchUsed) { touchUsed = false; e.stopPropagation(); return; }
+    });
+
+    /* ---- Mobile engine unlock: first touch/pointer never leaves the audio
+     * engine frozen. iOS/Android autoplay policies suspend AudioContext until a
+     * user gesture — any gesture inside the widget resumes it immediately. */
+    function unlockAudioOnGesture() {
+      if (!STATE.audioCtx || STATE.audioCtx.state !== 'suspended') return;
+      if (!STATE.playing && !STATE.autoplayBlocked) return;
+      try {
+        const p = STATE.audioCtx.resume();
+        if (p && typeof p.then === 'function') p.catch(() => {});
+        STATE.autoplayBlocked = false;
+      } catch (_) {}
+    }
+    ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach((evt) => {
+      try { els.fab.addEventListener(evt, unlockAudioOnGesture, { passive: true }); } catch (_) {}
+      try { els.panel.addEventListener(evt, unlockAudioOnGesture, { passive: true }); } catch (_) {}
     });
   }
 

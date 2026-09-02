@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>FocusBot — Neural Sound Waves for Deep Focus</title>
   <meta name="description" content="FocusBot is a lightweight, offline-first Chrome extension that synthesizes binaural frequencies, Solfeggio tones and ambient noise in real time with the Web Audio API. Zero telemetry, Smart Pomodoro, and a privacy-focused Bitcoin license." />
   <meta property="og:title" content="FocusBot — Autonomous Deep Work Suite" />
@@ -216,6 +216,24 @@
 
     /* ── Base accent color for inline `.accent` helper ── */
     .accent { color: var(--accent); }
+
+    /* ── Responsive / touch-friendly (≤ 640px) ─────────── */
+    @media (max-width: 640px) {
+      nav { padding: 12px 18px; }
+      nav .links { gap: 12px; }
+      .nav-cta { padding: 7px 12px; font-size: 12px; }
+      .hero { padding: 84px 16px 50px; min-height: 76vh; }
+      .hero p { font-size: 15px; }
+      .hero-actions { width: 100%; }
+      .hero-actions .hero-cta, .hero-actions .hero-sec {
+        width: 100%; max-width: 480px; margin: 0 auto; justify-content: center;
+      }
+      section { padding: 72px 16px; }
+      .pricing-card { padding: 32px 20px; }
+      .pricing-amount { font-size: 40px; }
+      .cta-strip { padding: 36px 18px; }
+      footer { padding: 36px 16px 32px; }
+    }
   </style>
 </head>
 <body>
