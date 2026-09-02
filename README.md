@@ -2,6 +2,8 @@
 
 # FocusBot — Autonomous Deep Work Suite & Neural Frequency Synthesizer
 
+live link: https://runtime-stranger.github.io/focus-bot/
+
 **Chrome extension** that synthesizes binaural frequencies, Solfeggio tones and ambient noise in real time with the **Web Audio API** — bundled with a **Smart Pomodoro timer** and a privacy-first, **Bitcoin-only** licensing model.
 
 ![Web Audio API](https://img.shields.io/badge/Audio-Web%20Audio%20API-38bdf8)
