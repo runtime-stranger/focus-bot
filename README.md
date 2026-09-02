@@ -158,7 +158,7 @@ scripts/            Package + icon generators
 ![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
 ![License](https://img.shields.io/badge/License-Proprietary-F7931A)
 
-**15 dakikalık ücretsiz deneme · 12 € tek seferlik · Bitcoin · Abonelik yok.**
+**15 dakikalık ücretsiz deneme · 12 € yıllık (365 gün) · Bitcoin · **
 Her şey tarayıcınızda yerel olarak çalışır. Hiçbir şey izlenmez, kaydedilmez veya yüklenmez.
 
 </div>
