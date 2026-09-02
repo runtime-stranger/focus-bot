@@ -100,8 +100,10 @@
   let lastState = null;
 
   function fmtTrial(ms) {
-    const h = Math.max(1, Math.ceil((ms || 0) / 3600000));
-    return h >= 24 ? Math.floor(h / 24) + ' day(s)' : h + ' hour(s)';
+    const total = Math.max(0, Math.ceil((ms || 0) / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m + 'm ' + s + 's';
   }
 
   function render(state) {
@@ -139,7 +141,7 @@
     const t = state.trial;
     els.st.trial.textContent = state.pro
       ? (state.expiresAt ? 'PRO · ' + Math.max(0, Math.ceil((state.expiresAt - Date.now()) / 86400000)) + ' days left' : 'PRO · Unlimited')
-      : (t && t.active ? fmtTrial(t.remainingMs) + ' left' : 'Expired');
+      : (t && t.active ? 'Trial: ' + fmtTrial(t.remainingMs) + ' left' : 'Trial Expired');
   }
 
   async function refresh() {

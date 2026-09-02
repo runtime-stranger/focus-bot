@@ -10,7 +10,7 @@ live link: https://runtime-stranger.github.io/focus-bot/
 ![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
 ![License](https://img.shields.io/badge/License-Proprietary-F7931A)
 
-**3-day frictionless free trial · €12 / 1 Year (365 Days) · Bitcoin · No auto-renewal.**
+**15-minute frictionless free trial · €12 / 1 Year (365 Days) · Bitcoin · No auto-renewal.**
 Everything runs locally in your browser. Nothing is tracked, recorded, or uploaded.
 
 </div>
@@ -23,7 +23,7 @@ FocusBot is a lightweight, **offline-first** Chrome extension for deep work. It 
 
 - **Zero telemetry** — no analytics, no trackers, no crash reporting.
 - **100% Offline-First** — all sound is generated on your device.
-- **1-Year License (365 days)** — 3-day free trial, then €12 for 365 days of PRO access, payable in Bitcoin via a non-recurring payment with no payment processor in the middle.
+- **1-Year License (365 days)** — 15-minute free trial, then €12 for 365 days of PRO access, payable in Bitcoin via a non-recurring payment with no payment processor in the middle.
 
 ---
 
@@ -54,7 +54,7 @@ All ten Solfeggio tones delivered as equal-phase mono carriers, including the fa
 25-minute focus / 5-minute break cycles that **auto-start the frequencies** with each focus phase and **auto-pause on breaks**. A soft synthesized **528 Hz crystal chime** marks every phase transition (2.5 s exponential tail — no audio file).
 
 ### Privacy-Focused Bitcoin License
-- **3-day frictionless trial** — no license, no key, no payment history; a live countdown badge shows the remaining window.
+- **15-minute frictionless trial** — no license, no key, no payment history; a live mm:ss countdown badge ("Trial: Xm Ys left") shows the remaining window.
 - **€12 / 1-year (365 days)** — pay in Bitcoin directly to the developer's address; no payment processor or middleman.
 - Paste your **TXID** (or a license key) to activate instantly via the Cloudflare Worker.
 
@@ -86,7 +86,7 @@ FocusBot builds a **single `AudioContext`** exactly once, then manages playback 
 - The `AudioContext` is **never constructed** without a verified license; flipping a flag cannot reconstruct the graph.
 - Frequency coefficients are delivered as a **base64url + HMAC-SHA256 signed** `engine` token on every license verification; a tampered token falls back to a safe matrix.
 - **Re-verification on every page load** and on tab foreground — if the server stops confirming the license, Pro is revoked immediately.
-- A **trial watchdog** runs on a timer and on tab focus to live-lock the engine the instant the 72-hour trial window expires.
+- A **trial watchdog** runs on a timer and on tab focus to live-lock the engine the instant the 15-minute trial window expires.
 
 ### Cloudflare Worker Endpoints
 
@@ -158,7 +158,7 @@ scripts/            Package + icon generators
 ![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
 ![License](https://img.shields.io/badge/License-Proprietary-F7931A)
 
-**3 gün ücretsiz deneme · 12 € tek seferlik · Bitcoin · Abonelik yok.**
+**15 dakikalık ücretsiz deneme · 12 € tek seferlik · Bitcoin · Abonelik yok.**
 Her şey tarayıcınızda yerel olarak çalışır. Hiçbir şey izlenmez, kaydedilmez veya yüklenmez.
 
 </div>
@@ -171,7 +171,7 @@ FocusBot, derin çalışma için tasarlanmış, hafif ve **çevrimdışı öncel
 
 - **Sıfır telemetri** — analitik, takipçi veya çökme raporlaması yok.
 - **%100 Çevrimdışı Öncelikli** — tüm ses cihazınızda üretilir.
-- **Tek seferlik lisans** — 3 gün ücretsiz deneme, ardından 365 gün için 12 €, ortada ödeme işlemcisi olmadan Bitcoin ile ödenebilir.
+- **Tek seferlik lisans** — 15 dakikalık ücretsiz deneme, ardından 365 gün için 12 €, ortada ödeme işlemcisi olmadan Bitcoin ile ödenebilir.
 
 ### Temel Özellikler
 
@@ -200,7 +200,7 @@ Her binaural mod, kesin sol/sağ frekans çiftleriyle belirli bir bilişsel duru
 25 dakika odaklanma / 5 dakika mola döngüleri; frekansları her odaklanma fazında **otomatik başlatır**, molalarda **otomatik duraklatır**. Her faz geçişinde yumuşak, sentezlenmiş bir **528 Hz kristal zil** çalar (2,5 s üstel kuyruk — ses dosyası yok).
 
 #### Gizlilik Odaklı Bitcoin Lisansı
-- **3 günlük sürtünmesiz deneme** — lisans, anahtar veya ödeme geçmişi gerekmez; kalan süreyi gösteren canlı geri sayım rozeti vardır.
+- **15 dakikalık sürtünmesiz deneme** — lisans, anahtar veya ödeme geçmişi gerekmez; kalan süreyi gösteren canlı mm:ss geri sayım rozeti ("Deneme: Xdk Ysn kaldı") vardır.
 - **Tek seferlik 12 €, 365 gün** — doğrudan geliştiricinin adresine Bitcoin ile ödeyin; ödeme işlemcisi veya aracı yok.
 - **TXID** (veya lisans anahtarınızı) yapıştırarak Cloudflare Worker üzerinden anında etkinleştirin.
 
@@ -228,7 +228,7 @@ FocusBot tek bir **`AudioContext`** oluşturur ve oynatmayı tamamen `suspend()`
 - Doğrulanmış lisans olmadan `AudioContext` **asla oluşturulmaz**; bir bayrağı çevirmek grafiği yeniden inşa edemez.
 - Frekans katsayıları, her lisans doğrulamasında **base64url + HMAC-SHA256 imzalı** `engine` token'ı olarak iletilir; kurcalanmış bir token güvenli yedek matrise düşer.
 - **Her sayfa yüklenişinde ve sekmeye dönüşte yeniden doğrulama** — sunucu lisansı onaylamazsa Pro anında iptal edilir.
-- Deneme süresinin 72 saati dolar dolmaz motoru anında kilitlemek için bir **deneme bekçisi (watchdog)** zamanlayıcı ve sekme odağı üzerinde çalışır.
+- Deneme süresinin 15 dakikası dolar dolmaz motoru anında kilitlemek için bir **deneme bekçisi (watchdog)** zamanlayıcı ve sekme odağı üzerinde çalışır.
 
 #### Cloudflare Worker Uç Noktaları
 

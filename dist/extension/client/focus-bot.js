@@ -7,7 +7,7 @@
  *  ARCHITECTURE
  *    - FAB (#fb-fab) → Panel (#fb-panel) → Payment Modal (#fb-overlay)
  *    - ACCESS MODEL: sound unlocks with Pro (BTC on-chain license) OR a
- *      3-day frictionless free trial (first run stamps focusbot.trialStart;
+ *      15-minute frictionless free trial (first run stamps focusbot.trialStart;
  *      hasAccess() gates every entry point below). Trial expiry is enforced
  *      live (watchdog + gates + re-suspend), not just at load time.
  *    - Audio engine: 2x OscillatorNode (pure Left/Right sine) + ChannelMerger +
@@ -118,10 +118,9 @@
   const RAIN_AM_HZ = 3.0;               // subtle droplet amplitude modulation rate
   const RAIN_AM_DEPTH = 0.18;           // ±18% amplitude wobble → rainfall shimmer
 
-  /** 3-day frictionless trial — sound unlocked for the first 72 hours. */
-  const TRIAL_DAYS = 3;
-  const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
-  const TRIAL_CHECK_MS = 30 * 1000;     // mid-session expiry watchdog
+  /** 15-minute frictionless trial — sound unlocked for the first 15 minutes. */
+  const TRIAL_MS = 15 * 60 * 1000;        // 15 minutes
+  const TRIAL_CHECK_MS = 1000;            // 1s mid-session expiry watchdog (mm:ss badge)
 
   /** Meditative crystal chime for Pomodoro phase transitions (pure synthesis).
    *  528 Hz — the "miracle / transformation" Solfeggio tone — with a long,
@@ -171,7 +170,7 @@
     key: 'focusbot.licenseKey',
     verifiedAt: 'focusbot.verifiedAt',
     customFreq: 'focusbot.customFreq',
-    trialStart: 'focusbot.trialStart',      // first-run epoch → 72h trial window
+    trialStart: 'focusbot.trialStart',      // first-run epoch → 15-minute trial window
     volBinaural: 'focusbot.volBinaural',    // "Binaural / Tone" slider (0..1)
     volAmbient: 'focusbot.volAmbient',      // "Ambient Mixer" slider (0..1)
     isPro: 'focusbot.isPro',                // persisted license state (multi-device)
@@ -233,10 +232,9 @@
     pro: false,
     proExpiresAt: null,
     licenseExpired: false,
+    trialStart: null,        // first-use epoch → 15-minute trial lease (stamped by bootstrapState)
+    leaseLocked: false,      // true once the trial lease is consumed (forced modal)
     verifying: false,
-
-    /* 3-day frictionless trial (first run stamps LS.trialStart) */
-    trialStart: null,
 
     /* Independent volume stages (persisted) */
     volBinaural: BINAURAL_GAIN,          // "Binaural / Tone volume" (0..2, default 1.0)
@@ -507,6 +505,14 @@
 
   function startPlayback() {
     if (STATE.playing) return;
+    // Consumed-trial lease: the engine stays hard-locked and the payment modal
+    // reopens — no sound can start again until a 12€ / 1-year licence is active.
+    if (STATE.leaseLocked || (STATE.trialStart && leaseTrialExpired())) {
+      lockSoundControls(true);
+      toast('15-minute trial ended. Activate Pro to keep listening.', 'error');
+      updatePlayingUI();
+      return;
+    }
     // Real-time licence expiry: a PRO session whose 365-day window just passed
     // is revoked and the renew modal reopens before any sound can start.
     if (licenseExpiredNow()) {
@@ -517,7 +523,7 @@
     }
     if (!hasAccess()) {
       if (STATE.trialStart) {
-        toast('3-day trial ended. Activate Pro to keep listening.', 'error');
+        toast('15-minute trial ended. Activate Pro to keep listening.', 'error');
       } else {
         toast('FocusBot requires an active license. Complete a 12 \u20AC Bitcoin payment for 365 days of access.', 'error');
       }
@@ -649,7 +655,7 @@
         STATE.proExpiresAt = null;           // unlimited — never expires
         STATE.engine = null;                 // stock hearing-safe frequency matrix
         persistLicense(key, kind);
-        renderLicenseUI(true);
+        setProActive();
         if (!silent) toast('Pro activated! Unlimited listening unlocked.', 'success');
         return true;
       }
@@ -665,7 +671,7 @@
         // The audio coefficients only materialize from a successful verification
         STATE.engine = decodeEngineToken(data.engine);
         persistLicense(key, 'pro', expiresAt, now);
-        renderLicenseUI(true);
+        setProActive();
         if (!silent) toast('Pro activated! 365 days of access unlocked.', 'success');
         // Guard: a server edge case with an already-past expiresAt must not
         // leave a live flag lying around — downgrade + renewal modal instead.
@@ -730,10 +736,10 @@
   }
 
   /* ==========================================================================
-   * 5b) 3-DAY FRICTIONLESS TRIAL
+   * 5b) 15-MINUTE FRICTIONLESS TRIAL
    * ======================================================================== */
 
-  /** Licensed Pro OR within the 72h trial window → sound is unlocked. */
+  /** Licensed Pro OR within the 15-minute trial window → sound is unlocked. */
   function hasAccess() {
     // Real-time 365-day gate: the instant the license window passes, Pro is
     // downgraded (storage updated) so every feature trigger hits the paywall.
@@ -743,6 +749,7 @@
     return STATE.pro || trialActive();
   }
   function trialActive() {
+    if (STATE.leaseLocked || leaseTrialExpired()) return false;
     return !!(STATE.trialStart && (Date.now() - STATE.trialStart) < TRIAL_MS);
   }
   function trialEndAt() {
@@ -752,10 +759,13 @@
     const e = trialEndAt();
     return e ? Math.max(0, e - Date.now()) : 0;
   }
-  /** Hungarian-style compact countdown for the footer badge. */
+  /** Live mm:ss countdown for the trial badge — "Trial: Xm Ys left". */
   function fmtTrialRemaining() {
-    const h = Math.max(1, Math.ceil(trialRemainingMs() / 3600000));
-    return h >= 24 ? Math.floor(h / 24) + ' g\u00fcn' : h + ' saat';
+    const ms = Math.max(0, trialRemainingMs());
+    const total = Math.ceil(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m + 'm ' + s + 's';
   }
 
   /** Whole days of PRO access remaining (null = unlimited / no expiry). */
@@ -810,20 +820,51 @@
       if (present(saved && saved[LS.volAmbient]) && Number.isFinite(va) && va >= 0 && va <= 1) STATE.volAmbient = va;
     } catch (_) {}
     if (STATE.nodes && STATE.audioCtx) applyEngineVolumes();
+    // Boot-time trial enforcement: a trial lease that already elapsed (or a
+    // persisted lock) locks the sound engine and reopens the licence modal.
+    if (leaseTrialExpired()) lockSoundControls(true);
     updateFooter();
   }
 
   /** Called on a timer + tab re-focus: lock the engine the moment a live
-   *  trial window ends (crash-proof even for a session started before expiry). */
+   *  trial window ends (crash-proof even for a session started before expiry).
+   *  Audio is halted, all sound controls are disabled and a non-dismissable
+   *  "License Required — 12€ / 1 Year" payment modal is forced open. */
   function trialWatchdog() {
     if (STATE.pro) { updateFooter(); return; }
     if (trialActive()) { updateFooter(); return; }
     if (!STATE.trialStart) return;   // window not stamped yet — nothing to enforce
+    const expired = leaseTrialExpired();
+    if (expired) {
+      lockSoundControls(true);
+      openUpsell();
+      toast('15-minute trial ended. Activate Pro to keep listening.', 'error');
+    }
+  }
+
+  /** Trial session is burned (no time left and not a Pro licensee). */
+  function leaseTrialExpired() {
+    return !!(STATE.trialStart && !STATE.pro && (Date.now() - STATE.trialStart) >= TRIAL_MS);
+  }
+
+  /** Hard-lock the sound engine once the trial lease is consumed: halt audio,
+   *  disable every playback/control/ambient/pomodoro button and re-inject the
+   *  licence "unlock" affordance so the only exit is a 12€ / 1-year licence. */
+  function lockSoundControls(openModal) {
     if (STATE.playing) pausePlayback();
     if (STATE.activeAmbients.size) applyAmbients(new Set());
+    if (els.play) setHidden(els.play, true);
+    if (els.modesWrap) try { els.modesWrap.setAttribute('aria-disabled', 'true'); } catch (_) {}
+    if (els.ambRow) try { els.ambRow.setAttribute('aria-disabled', 'true'); } catch (_) {}
+    if (els.fab) try { els.fab.setAttribute('aria-disabled', 'true'); } catch (_) {}
+    if (els.pomoStart) els.pomoStart.disabled = true;
+    renderLicenseUI(false);
     updateFooter();
-    openUpsell();
-    toast('3-day trial ended. Activate Pro to keep listening.', 'error');
+    if (openModal) {
+      STATE.leaseLocked = true;
+      updateRenewalModal();
+      openUpsell();
+    }
   }
 
   /** Same timer, license side: the moment the 365-day window passes while the
@@ -1325,15 +1366,14 @@
       els.quota.textContent = days == null ? 'PRO \u00B7 Unlimited' : 'PRO \u00B7 ' + days + ' days left';
     } else if (trialActive()) {
       // Living countdown badge — the trial is the default every user sees.
-      els.quota.textContent = 'Deneme: ' + fmtTrialRemaining() + ' kald\u0131';
+      els.quota.textContent = 'Trial: ' + fmtTrialRemaining() + ' left';
     } else {
-      els.quota.textContent = 'License required';
+      els.quota.textContent = 'Trial Expired \u2014 License required';
     }
-    // The Buy Pro button is PERMANENTLY visible in EVERY license state — its
-    // label never changes. Clicking it always opens the license/payment modal,
-    // where Pro users see their status/key entry too (openUpsell renders
-    // pricing; applyLicense handles an already-live key).
-    els.buy.textContent = 'Buy Pro';
+    // The Buy Pro button is PERMANENTLY visible in EVERY license state; once a
+    // trial lease is consumed it becomes the single "unlock" exit into the
+    // forced 12€ / 1-year payment modal (label re-injected each render).
+    els.buy.textContent = STATE.leaseLocked ? 'Unlock \u2014 12\u20AC / 1 Year' : 'Buy Pro';
     setHidden(els.buy, false);
   }
 
@@ -1349,6 +1389,22 @@
     try { els.dot.classList.toggle('on', !!active); } catch (_) {}
   }
 
+  /** Unlock the full sound engine after a successful license activation:
+   *  restore any playback/ambient controls hidden by the trial lock, clear the
+   *  consumed-trial state and re-enable the payment modal's close button. */
+  function setProActive() {
+    STATE.leaseLocked = false;
+    if (els.play) setHidden(els.play, false);
+    if (els.modesWrap) try { els.modesWrap.removeAttribute('aria-disabled'); } catch (_) {}
+    if (els.ambRow) try { els.ambRow.removeAttribute('aria-disabled'); } catch (_) {}
+    if (els.fab) try { els.fab.removeAttribute('aria-disabled'); } catch (_) {}
+    if (els.pomoStart) els.pomoStart.disabled = false;
+    try { els.quota.textContent = ''; } catch (_) {}
+    if (els.closeModal) setHidden(els.closeModal, false);
+    updateFooter();
+    renderLicenseUI(true);
+  }
+
   /** Retitle the modal for an expired license → "License Required — Renew for
    *  365 Days"; the generic title is kept for trial/first-activation. */
   function updateRenewalModal() {
@@ -1360,6 +1416,8 @@
   function openUpsell() {
     if (STATE.licenseExpired && els.mTitle) {
       els.mTitle.textContent = 'License Required \u2014 Renew for 365 Days';
+    } else if (STATE.leaseLocked && els.mTitle) {
+      els.mTitle.textContent = 'License Required \u2014 12\u20AC / 1 Year';
     }
     els.btcAddr.textContent = CONFIG.btcAddress;
     // Show a placeholder while fetching live pricing
@@ -1368,7 +1426,13 @@
       els.btcQr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=' +
         encodeURIComponent('bitcoin:' + CONFIG.btcAddress);
     } catch (_) {}
+    // A consumed trial lease channels straight into the payment modal and the
+    // close button is suppressed so the audio stays locked behind the licence.
     setHidden(els.overlay, false);
+    if (STATE.leaseLocked) {
+      if (els.mTitle) els.mTitle.textContent = 'License Required \u2014 12\u20AC / 1 Year';
+      if (els.closeModal) setHidden(els.closeModal, true);
+    }
     // Fetch live pricing from the worker
     fetchPricing();
   }
@@ -1971,7 +2035,7 @@
     return {
       pro: STATE.pro,
       trial: {
-        days: TRIAL_DAYS,
+        minutes: 15,
         active: trialActive(),
         remainingMs: trialRemainingMs(),
         endsAt: trialEndAt(),
@@ -2123,10 +2187,10 @@
     get volumeBinaural() { return STATE.volBinaural; },
     get volumeAmbient() { return STATE.volAmbient; },
 
-    /* 3-day frictionless trial status */
+    /* 15-minute frictionless trial status */
     get trial() {
       return {
-        days: TRIAL_DAYS,
+        minutes: 15,
         active: trialActive(),
         remainingMs: trialRemainingMs(),
         endsAt: trialEndAt(),
@@ -2221,7 +2285,8 @@
   bootstrapState();
 
   // Mid-session expiry watchdog — a running session locks the instant the
-  // 72h window passes; the license equivalent enforces the 365-day Pro window.
+  // 15-minute trial window passes; the license equivalent enforces the
+  // 365-day Pro window.
   try {
     setInterval(trialWatchdog, TRIAL_CHECK_MS);
     setInterval(licenseWatchdog, TRIAL_CHECK_MS);

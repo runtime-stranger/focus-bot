@@ -128,11 +128,12 @@ function expectUndefined(v, msg) { if (v !== undefined) throw new Error(`${msg} 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Seed an EXPIRED 3-day trial so a scenario exercises the post-trial hard
- * paywall. The trial window is 72h; 96 hours back guarantees it is over.
+ * Seed an EXPIRED 15-minute trial so a scenario exercises the post-trial hard
+ * paywall. The trial window is 15 minutes; 16 minutes back guarantees it is over.
  * (bootstrapState() keeps an existing trialStart — it never re-stamps.)
+ * The trial lease is 15 minutes (TRIAL_MS = 15 * 60 * 1000 in focus-bot.js).
  */
-const EXPIRED_TRIAL_MS = 96 * 3600 * 1000;
+const EXPIRED_TRIAL_MS = 16 * 60 * 1000;
 const seedExpiredTrial = (env) =>
   env.ls.setItem('focusbot.trialStart', String(Date.now() - EXPIRED_TRIAL_MS));
 
@@ -1113,7 +1114,7 @@ async function clientScenarios() {
     /* ---- SCENARIO 7 ---- */
     await scenario('7. Hard paywall: no license -> modal opens, audioContext NOT created', async () => {
       env.ls._clear();
-      seedExpiredTrial(env);   // past the 72h frictionless window → paywall applies
+      seedExpiredTrial(env);   // past the 15-minute frictionless window → paywall applies
       const c = await freshClient(env);
       const fb = c.FocusBot;
 
@@ -2235,7 +2236,7 @@ async function clientMemoryLeakScenarios() {
 }
 
 /* ===========================================================================
- * SCENARIO 59-68 : CLIENT — 3-DAY TRIAL · VOLUME STAGES · GONG CHIME ·
+ * SCENARIO 59-68 : CLIENT — 15-MINUTE TRIAL · VOLUME STAGES · GONG CHIME ·
  *                  DELTA/SOLFEGGIO MODES · BROWN NOISE
  * ======================================================================== */
 async function trialVolumeChimeScenarios() {
@@ -2244,22 +2245,22 @@ async function trialVolumeChimeScenarios() {
   try {
 
     /* ---- SCENARIO 59 ---- */
-    await scenario('59. Trial: first run stamps the 72h window, sound works frictionless, badge shows', async () => {
+    await scenario('59. Trial: first run stamps the 15-minute window, sound works frictionless, badge shows', async () => {
       env.ls._clear();
       const c = await freshClient(env);
       const fb = c.FocusBot;
 
-      // No license, no key, no payment — the first 72 hours are fully unlocked.
+      // No license, no key, no payment — the first 15 minutes are fully unlocked.
       expectEqual(fb.isPro, false, 'unlicensed');
       expectTrue(fb.trial.active, 'trial active right after first boot');
-      expectEqual(fb.trial.days, 3, '3-day window');
+      expectEqual(fb.trial.minutes, 15, '15-minute window');
       const stamped = Number(env.ls.getItem('focusbot.trialStart'));
       expectTrue(Number.isFinite(stamped) && stamped > 0, 'first run stamps focusbot.trialStart');
-      expectEqual(fb.trial.endsAt, stamped + 3 * 24 * 3600 * 1000, 'endsAt = start + 72h');
-      expectTrue(fb.trial.remainingMs > 0 && fb.trial.remainingMs <= 3 * 24 * 3600 * 1000, 'remainingMs within 72h');
+      expectEqual(fb.trial.endsAt, stamped + 15 * 60 * 1000, 'endsAt = start + 15 minutes');
+      expectTrue(fb.trial.remainingMs > 0 && fb.trial.remainingMs <= 15 * 60 * 1000, 'remainingMs within 15 minutes');
       const badge = c.stub('.quota').textContent || '';
-      expectTrue(badge.indexOf('Deneme') !== -1, 'footer badge shows the trial countdown (got: ' + badge + ')');
-      expectTrue(badge.indexOf('kald\u0131') !== -1, 'badge in Turkish, "kaldı"');
+      expectTrue(badge.indexOf('Trial:') !== -1, 'footer badge shows the mm:ss countdown (got: ' + badge + ')');
+      expectTrue(badge.indexOf(' left') !== -1, 'badge reads "Trial: Xm Ys left"');
 
       fb.play();
       await waitFor(() => fb.isPlaying, 2000, 'frictionless trial play');
@@ -2274,35 +2275,36 @@ async function trialVolumeChimeScenarios() {
       const fb2 = c2.FocusBot;
       expectEqual(Number(env.ls.getItem('focusbot.trialStart')), stamped, 'trialStart NOT re-stamped on reload');
       expectTrue(fb2.trial.active, 'trial still active after reload');
-      expectEqual(fb2.trial.endsAt, stamped + 3 * 24 * 3600 * 1000, 'window anchored to the original start');
+      expectEqual(fb2.trial.endsAt, stamped + 15 * 60 * 1000, 'window anchored to the original start');
     });
 
     /* ---- SCENARIO 61 ---- */
-    await scenario('61. Trial: expired at boot → locked, badge "License required", no audio', async () => {
+    await scenario('61. Trial: expired at boot → locked, badge "Trial Expired", no audio', async () => {
       env.ls._clear();
       seedExpiredTrial(env);
       const c = await freshClient(env);
       const fb = c.FocusBot;
       expectEqual(fb.trial.active, false, 'trial inactive');
       expectEqual(fb.trial.remainingMs, 0, 'remainingMs 0');
-      expectEqual((c.stub('.quota').textContent || ''), 'License required', 'badge shows License required');
+      expectEqual((c.stub('.quota').textContent || ''), 'Trial Expired \u2014 License required', 'badge shows Trial Expired');
       fb.play();
       await sleep(20);
       expectEqual(fb.isPlaying, false, 'play blocked');
       expectEqual(MockAudioContext.instances.length, 0, 'no AudioContext after trial');
       expectEqual(c.stub('.overlay').hidden, false, 'upsell modal opened');
+      expectEqual(c.stub('.modal-close').hidden, true, 'modal close hidden on boot-time lock');
     });
 
     /* ---- SCENARIO 62 ---- */
     await scenario('62. Trial: mid-session expiry pauses audio, opens paywall, stays locked', async () => {
       env.ls._clear();
-      env.ls.setItem('focusbot.trialStart', String(Date.now() - 2 * 3600 * 1000)); // started 2h ago → active
+      env.ls.setItem('focusbot.trialStart', String(Date.now() - 5 * 60 * 1000)); // started 5 min ago → active
       const c = await freshClient(env);
       const fb = c.FocusBot;
       fb.play();
       await waitFor(() => fb.isPlaying, 2000, 'plays inside the trial window');
       const realNow = Date.now;
-      Date.now = () => realNow() + 3 * 24 * 3600 * 1000;   // jump past the 72h window
+      Date.now = () => realNow() + 20 * 60 * 1000;   // jump past the 15-minute window
       try {
         const wd = lastInterval('trialWatchdog');
         expectTrue(!!wd, 'trial watchdog interval registered');
@@ -2316,6 +2318,11 @@ async function trialVolumeChimeScenarios() {
         await sleep(20);
         expectEqual(fb.isPlaying, false, 'still locked after expiry');
         expectEqual(MockAudioContext.instances.length, 1, 'existing context only — no graph rebuild');
+        // The lock is non-dismissable: the payment modal stays open, its close
+        // button is suppressed and the only affordance is the unlock CTA.
+        expectEqual(c.stub('.overlay').hidden, false, 'modal still open after re-play attempt');
+        expectEqual(c.stub('.modal-close').hidden, true, 'modal close hidden while trial lock is enforced');
+        expectEqual(c.stub('#btn-buy-pro').textContent, 'Unlock \u2014 12\u20AC / 1 Year', 'buy CTA relabeled to the unlock action');
       } finally {
         Date.now = realNow;
       }
@@ -2403,7 +2410,7 @@ async function trialVolumeChimeScenarios() {
       const st = fb.state;
       expectEqual(st.volumeBinaural, 1.5, 'public state volumeBinaural');
       expectEqual(st.volumeAmbient, 0.25, 'public state volumeAmbient');
-      expectTrue(!!st.trial && st.trial.days === 3, 'public state carries trial info');
+      expectTrue(!!st.trial && st.trial.minutes === 15, 'public state carries trial info');
       expectEqual(st.mode, 'beta', 'mode untouched by volume changes');
     });
 
