@@ -145,15 +145,162 @@ scripts/            Package + icon generators
 
 ---
 
+## Türkçe
+
+<div align="center">
+
+# FocusBot — Otonom Derin Çalışma Paketi ve Nöral Frekans Sentezleyici
+
+**Manifest V3 Chrome eklentisi** — **Web Audio API** ile binaural frekansları, Solfeggio tonlarını ve ambient gürültüyü gerçek zamanlı sentezler; **Akıllı Pomodoro** zamanlayıcısı ve gizlilik odaklı, **yalnızca Bitcoin** kabul eden lisanslama modeliyle birlikte gelir.
+
+![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
+![Web Audio API](https://img.shields.io/badge/Audio-Web%20Audio%20API-38bdf8)
+![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
+![License](https://img.shields.io/badge/License-Proprietary-F7931A)
+
+**3 gün ücretsiz deneme · 12 € tek seferlik · Bitcoin · Abonelik yok.**
+Her şey tarayıcınızda yerel olarak çalışır. Hiçbir şey izlenmez, kaydedilmez veya yüklenmez.
+
+</div>
+
+---
+
+### FocusBot Nedir?
+
+FocusBot, derin çalışma için tasarlanmış, hafif ve **çevrimdışı öncelikli** bir Chrome eklentisidir. Yerel **Web Audio API**'sini kullanarak tarayıcı sekmenizde nöral frekansları gerçek zamanlı üretir — sıfır ses indirme, sıfır akış, sıfır gecikme. **Akıllı Pomodoro** zamanlayıcısını bir **ambient gürültü karıştırıcısıyla** birleştirir; hepsi MV3 araç çubuğu popup'ıyla senkron çalışan tek bir yüzen pencerede toplanır.
+
+- **Sıfır telemetri** — analitik, takipçi veya çökme raporlaması yok.
+- **%100 Çevrimdışı Öncelikli** — tüm ses cihazınızda üretilir.
+- **Tek seferlik lisans** — 3 gün ücretsiz deneme, ardından 365 gün için 12 €, ortada ödeme işlemcisi olmadan Bitcoin ile ödenebilir.
+
+### Temel Özellikler
+
+#### Nöral Frekanslar — Delta'dan Gamma'ya
+Her binaural mod, kesin sol/sağ frekans çiftleriyle belirli bir bilişsel durumu hedefler:
+
+| Mod | Sol → Sağ (Hz) | En İyi Kullanım Alanı |
+|---|---|---|
+| **Delta** | 100 → 102 (Δ2) | Derin, onarıcı uyku |
+| **Theta** | 180 → 186 (Δ6) | Yaratıcılık & meditasyon |
+| **Alpha** | 200 → 210 (Δ10) | Rahat odaklanma & öğrenme |
+| **Beta** | 200 → 214 (Δ14) | Aktif konsantrasyon |
+| **Gamma** | 200 → 240 (Δ40) | Zirve biliş |
+
+İstediğiniz zaman **özel binaural aralık** (0–1000 Hz) belirleyebilirsiniz.
+
+#### Tam Solfeggio Spektrumu — 174 Hz'den 963 Hz'e
+Ünlü **432 Hz** ve **528 Hz** dahil on Solfeggio tonu, eş fazlı mono taşıyıcılar olarak sunulur:
+
+**174 · 285 · 396 · 417 · 432 · 528 · 639 · 741 · 852 · 963 Hz**
+
+#### Ambient Gürültü Katmanları
+**Pink · Brown · Rain · White** gürültü tabanları, tonlarınızın altına çalıştırma anında sentezlenir; her biri bağımsız aç/kapat anahtarına ve kendi ses seviyesi aşamasına sahiptir — birim ambient veri yolu, pink telafi kazancı ve özel bir brown derin bas güçlendirici sayesinde net duyulacak şekilde tasarlanmıştır.
+
+#### Akıllı Pomodoro
+25 dakika odaklanma / 5 dakika mola döngüleri; frekansları her odaklanma fazında **otomatik başlatır**, molalarda **otomatik duraklatır**. Her faz geçişinde yumuşak, sentezlenmiş bir **528 Hz kristal zil** çalar (2,5 s üstel kuyruk — ses dosyası yok).
+
+#### Gizlilik Odaklı Bitcoin Lisansı
+- **3 günlük sürtünmesiz deneme** — lisans, anahtar veya ödeme geçmişi gerekmez; kalan süreyi gösteren canlı geri sayım rozeti vardır.
+- **Tek seferlik 12 €, 365 gün** — doğrudan geliştiricinin adresine Bitcoin ile ödeyin; ödeme işlemcisi veya aracı yok.
+- **TXID** (veya lisans anahtarınızı) yapıştırarak Cloudflare Worker üzerinden anında etkinleştirin.
+
+### Gizlilik, İzinler ve Lisanslama
+
+- **Sıfır telemetri** — FocusBot hiçbir şey izlemez. Tüm tercihleriniz, deneme süreniz ve lisans durumunuz yerel tarayıcınızda (`chrome.storage.local`) kalır.
+- **Asgari izinler** — yalnızca `storage` (ve sentez için Web Audio API). Gezinme geçmişi, sekmeler, kamera, mikrofon veya konum erişimi yoktur.
+- **Yalnızca Bitcoin ödemeleri** — kredi kartı, banka veya fatura adresi hiçbir zaman istenmez, işlenmez veya saklanmaz.
+
+> *(Ödeme Notu: Kullanıcı gizliliğini en üst düzeye çıkarmak ve yetkisiz yinelenen kart tahsilatlarını önlemek için FocusBot, ömür boyu lisanslar için yalnızca Bitcoin kabul eder. Kredi kartı bilgileri, fatura adresleri veya kişisel finansal veriler asla istenmez, işlenmez veya saklanmaz.)*
+
+Tam **[Gizlilik Politikası'na](privacy.html)** göz atın.
+
+### Mimari ve Teknik Detaylar
+
+#### Web Audio API Grafiği
+FocusBot tek bir **`AudioContext`** oluşturur ve oynatmayı tamamen `suspend()` / `resume()` üzerinden yönetir — bağlam sızıntıları ve çözme zorunluluğu ortadan kalkar. Grafik yapılandırılmış bir hattır:
+
+- **Binaural motor** — doğrulanmış lisansın arkasına bağlanmış, birleştiriciye (L/R) giden iki osilatör.
+- **Ambient veri yolları** — çalışma anında üretilen Pink, Brown, Rain ve White gürültü tamponları.
+- **Bağımsız aşamalar** — ayrı binaural/ton ve ambient ana kazançları, Brown için derin bas güçlendirici ve kırpılmayı önleyen son bir kompresör.
+- **Temiz kapatma** — `pagehide` olayında duraklatma zamanlayıcısı temizlenir ve bağlam duraklatılır; arka planda hiçbir şey sızmaz.
+
+#### Lisans Sertleştirmesi
+- Doğrulanmış lisans olmadan `AudioContext` **asla oluşturulmaz**; bir bayrağı çevirmek grafiği yeniden inşa edemez.
+- Frekans katsayıları, her lisans doğrulamasında **base64url + HMAC-SHA256 imzalı** `engine` token'ı olarak iletilir; kurcalanmış bir token güvenli yedek matrise düşer.
+- **Her sayfa yüklenişinde ve sekmeye dönüşte yeniden doğrulama** — sunucu lisansı onaylamazsa Pro anında iptal edilir.
+- Deneme süresinin 72 saati dolar dolmaz motoru anında kilitlemek için bir **deneme bekçisi (watchdog)** zamanlayıcı ve sekme odağı üzerinde çalışır.
+
+#### Cloudflare Worker Uç Noktaları
+
+| Rota | Amaç |
+|---|---|
+| `GET /api/health` | Sağlık kontrolü |
+| `POST /api/verify-license` | Lisans anahtarı → `{ valid, plan, expiresAt, engine }` |
+| `POST /api/verify-tx` | BTC TXID → zincir üstü doğrulama → otomatik etkinleştirme |
+| `GET /api/pricing` | Canlı EUR → satoshi dönüşümü (önbellek + yedek) |
+| `POST /api/admin/grant` | Lisans üretimi (admin token) |
+
+### Yerel Geliştirme Kurulumu
+
+```bash
+npm install      # çalışma zamanı bağımlılığı yok
+npm test         # test paketi, sıfır dış çağrı (Node.js >= 18)
+npm run package  # sürüm ZIP'lerini yeniden üretir (MV3 düz paket)
+```
+
+**Test paketini çalıştırın:**
+```bash
+npm test
+```
+
+**Eklenti paketlerini derleyin:**
+```bash
+npm run package
+```
+Repo köküne `focus-bot-extension.zip` ve `focus-bot-webstore-v1.3.0.zip` yazar.
+
+### Eklentiyi yerel olarak yükleyin (Chrome / Brave / Edge)
+
+1. **Releases** sayfasından `focus-bot-extension.zip` dosyasını indirin ve hatırlayacağınız bir klasöre çıkarın.
+2. `chrome://extensions` (Chrome / Brave) veya `edge://extensions` (Edge) adresini açın.
+3. **Geliştirici Modu**'nu (sağ üst) etkinleştirin, **Paketlenmemiş yükle** (sol üst) deyin ve `manifest.json` içeren klasörü seçin.
+
+### Depo Yapısı
+
+```
+client/
+  manifest.json     MV3 manifest (izinler, CSP, ikonlar)
+  focus-bot.js      Widget motoru — ses grafiği, lisans, deneme
+  focus-bot.css     Widget ve Buy Pro stilleri
+  popup.html|js     MV3 araç çubuğu popup'ı
+  index.html        Depo içi demo / yerel test sayfası
+  privacy.html      Pakete dahil gizlilik sayfası
+index.html          Genel tanıtım sayfası (GitHub Pages / Vercel / Netlify)
+privacy.html        Genel gizlilik politikası sayfası
+worker/             Cloudflare Worker lisans API'si
+tests/              Headless test paketi (node)
+scripts/            Paket + ikon üreticileri
+```
+
+---
+
 ## Legal Disclaimer
 
 FocusBot is a sound-synthesis and productivity tool. It is **not** a medical device and is not intended to diagnose, treat, or cure any cognitive, neurological, or psychiatric condition. Blockchain payments are irreversible — verify all payment parameters before broadcasting.
+
+### Yasal Uyarı
+
+FocusBot bir ses sentezleme ve verimlilik aracıdır. **Tıbbi cihaz değildir**; herhangi bir bilişsel, nörolojik veya psikiyatrik durumu teşhis veya tedavi etme amacı taşımaz. Blokzincir ödemeleri geri alınamaz — yayınlamadan önce tüm ödeme parametrelerini kontrol edin.
 
 ---
 
 ## License
 
 **Proprietary Commercial Software.** All rights reserved. Unauthorized copying, redistribution, or re-sale is prohibited. See the [Privacy Policy](privacy.html) for data-handling details.
+
+### Lisans
+
+**Ticari Özel Mülkiyet Lisansı.** Tüm hakları saklıdır. Kopyalama, yeniden dağıtım veya yeniden satış yasaktır. Veri işleme ayrıntıları için [Gizlilik Politikası'na](privacy.html) bakın.
 
 ---
 
