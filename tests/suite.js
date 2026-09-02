@@ -2872,12 +2872,12 @@ async function webstoreComplianceScenarios() {
   });
 
   /* ---- SCENARIO 53 ---- */
-  await scenario('53. Store manifest: v1.3.0, full icon set wired, developer/homepage_url, storage-only + strict CSP', async () => {
+  await scenario('53. Store manifest: v1.3.1, full icon set wired, developer/homepage_url, storage-only + strict CSP', async () => {
     const fsMod = await import('node:fs');
     const manifestPath = new URL('../client/manifest.json', import.meta.url);
     expectTrue(fsMod.existsSync(manifestPath), 'manifest.json present');
     const manifest = JSON.parse(fsMod.readFileSync(manifestPath, 'utf8'));
-    expectEqual(manifest.version, '1.3.0', 'version pinned to 1.3.0');
+    expectEqual(manifest.version, '1.3.1', 'version pinned to 1.3.1');
     expectEqual(manifest.manifest_version, 3, 'MV3');
 
     // Icon set: 16/32/48/128 files exist AND are wired into icons + default_icon

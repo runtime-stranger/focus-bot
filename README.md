@@ -117,7 +117,7 @@ npm test
 ```bash
 npm run package
 ```
-Writes `focus-bot-extension.zip` and `focus-bot-webstore-v1.3.0.zip` to the repo root.
+Writes `focus-bot-extension.zip` and `focus-bot-webstore-v1.3.1.zip` to the repo root.
 
 ### Install the extension locally (Chrome / Brave / Edge)
 
@@ -257,7 +257,7 @@ npm test
 ```bash
 npm run package
 ```
-Repo köküne `focus-bot-extension.zip` ve `focus-bot-webstore-v1.3.0.zip` yazar.
+Repo köküne `focus-bot-extension.zip` ve `focus-bot-webstore-v1.3.1.zip` yazar.
 
 ### Eklentiyi yerel olarak yükleyin (Chrome / Brave / Edge)
 
@@ -304,4 +304,4 @@ FocusBot bir ses sentezleme ve verimlilik aracıdır. **Tıbbi cihaz değildir**
 
 ---
 
-*Last updated: September 2026 | FocusBot v1.3.0*
+*Last updated: September 2026 | FocusBot v1.3.1*

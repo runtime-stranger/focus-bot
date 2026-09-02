@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const CLIENT = join(ROOT, 'client');
 const OUT = join(ROOT, 'focus-bot-extension.zip');
 const OUT_STORE = join(ROOT, 'focus-bot-webstore-v' + VERSION + '.zip');
