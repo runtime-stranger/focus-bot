@@ -10,7 +10,7 @@ live link: https://runtime-stranger.github.io/focus-bot/
 ![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
 ![License](https://img.shields.io/badge/License-Proprietary-F7931A)
 
-**3-day frictionless free trial · €12 one-time · Bitcoin · No subscriptions.**
+**3-day frictionless free trial · €12 / 1 Year (365 Days) · Bitcoin · No auto-renewal.**
 Everything runs locally in your browser. Nothing is tracked, recorded, or uploaded.
 
 </div>
@@ -23,7 +23,7 @@ FocusBot is a lightweight, **offline-first** Chrome extension for deep work. It 
 
 - **Zero telemetry** — no analytics, no trackers, no crash reporting.
 - **100% Offline-First** — all sound is generated on your device.
-- **One-time license** — 3-day free trial, then €12 for 365 days, payable in Bitcoin with no payment processor in the middle.
+- **1-Year License (365 days)** — 3-day free trial, then €12 for 365 days of PRO access, payable in Bitcoin via a non-recurring payment with no payment processor in the middle.
 
 ---
 
@@ -55,7 +55,7 @@ All ten Solfeggio tones delivered as equal-phase mono carriers, including the fa
 
 ### Privacy-Focused Bitcoin License
 - **3-day frictionless trial** — no license, no key, no payment history; a live countdown badge shows the remaining window.
-- **€12 one-time, 365 days** — pay in Bitcoin directly to the developer's address; no payment processor or middleman.
+- **€12 / 1-year (365 days)** — pay in Bitcoin directly to the developer's address; no payment processor or middleman.
 - Paste your **TXID** (or a license key) to activate instantly via the Cloudflare Worker.
 
 ---
@@ -66,7 +66,7 @@ All ten Solfeggio tones delivered as equal-phase mono carriers, including the fa
 - **Minimal permissions** — only `storage` (plus the Web Audio API for synthesis). No browsing history, tabs, camera, microphone, or location access.
 - **Bitcoin-only payments** — no credit card, bank, or billing address is ever requested, processed, or stored.
 
-> *(Payment Note: To maximize user privacy and prevent unauthorized recurring card charges, FocusBot exclusively accepts Bitcoin for lifetime licenses. No credit card details, billing addresses, or personal financial data are ever requested, processed, or stored.)*
+> *(Payment Note: To maximize user privacy and prevent unauthorized recurring card charges, FocusBot exclusively accepts Bitcoin for 1-year licenses. No credit card details, billing addresses, or personal financial data are ever requested, processed, or stored.)*
 
 Read the full **[Privacy Policy →](privacy.html)**.
 
@@ -210,7 +210,7 @@ Her binaural mod, kesin sol/sağ frekans çiftleriyle belirli bir bilişsel duru
 - **Asgari izinler** — yalnızca `storage` (ve sentez için Web Audio API). Gezinme geçmişi, sekmeler, kamera, mikrofon veya konum erişimi yoktur.
 - **Yalnızca Bitcoin ödemeleri** — kredi kartı, banka veya fatura adresi hiçbir zaman istenmez, işlenmez veya saklanmaz.
 
-> *(Ödeme Notu: Kullanıcı gizliliğini en üst düzeye çıkarmak ve yetkisiz yinelenen kart tahsilatlarını önlemek için FocusBot, ömür boyu lisanslar için yalnızca Bitcoin kabul eder. Kredi kartı bilgileri, fatura adresleri veya kişisel finansal veriler asla istenmez, işlenmez veya saklanmaz.)*
+> *(Ödeme Notu: Kullanıcı gizliliğini en üst düzeye çıkarmak ve yetkisiz yinelenen kart tahsilatlarını önlemek için FocusBot, 1 yıllık (365 gün) lisanslar için yalnızca Bitcoin kabul eder. Kredi kartı bilgileri, fatura adresleri veya kişisel finansal veriler asla istenmez, işlenmez veya saklanmaz.)*
 
 Tam **[Gizlilik Politikası'na](privacy.html)** göz atın.
 

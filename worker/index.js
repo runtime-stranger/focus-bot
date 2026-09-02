@@ -487,7 +487,7 @@ async function handleVerifyTx(request, env, cors) {
 /* ==========================================================================
  * 4) POST /api/admin/grant — manual license issuance (after BTC confirmation)
  *    Header : Authorization: Bearer <ADMIN_TOKEN>
- *    Body   : { domains?: ['example.com'], days?: 365 }   (no days = lifetime)
+ *    Body   : { domains?: ['example.com'], days?: 365 }   (no days = 365 → 1 year of access)
  * ======================================================================== */
 async function handleAdminGrant(request, env, cors) {
   const auth = request.headers.get('authorization') || '';
