@@ -9,15 +9,17 @@
  * Usage:
  *   node scripts/package.js         (or: npm run package)
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = '1.3.0';
 const CLIENT = join(ROOT, 'client');
 const OUT = join(ROOT, 'focus-bot-extension.zip');
 const OUT_STORE = join(ROOT, 'focus-bot-webstore-v' + VERSION + '.zip');
+// Ready-to-load Chrome folder — select THIS path under chrome://extensions → "Load unpacked".
+const DIST_EXT = join(ROOT, 'dist', 'extension');
 
 // Production store files only — entry order matters for a deterministic archive.
 const ENTRIES = [
@@ -133,8 +135,28 @@ const archive = zip(entries);
 writeFileSync(OUT, archive);
 writeFileSync(OUT_STORE, archive);
 
+/* ---- Load-unpacked folder ---- */
+function copyDir(src, dest) {
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, entry.name);
+    const d = join(dest, entry.name);
+    if (entry.isDirectory()) copyDir(s, d);
+    else if (entry.isFile()) copyFileSync(s, d);
+  }
+}
+
+rmSync(DIST_EXT, { recursive: true, force: true });
+mkdirSync(DIST_EXT, { recursive: true });
+copyDir(CLIENT, join(DIST_EXT, 'client'));
+// The root manifest is the single source of truth for the loadable folder and
+// must sit at the TOP of dist/extension, referencing ./client/ via relative paths.
+copyFileSync(join(ROOT, 'manifest.json'), join(DIST_EXT, 'manifest.json'));
+
 const total = entries.reduce((s, e) => s + e.data.length, 0);
 console.log(`[package] wrote ${OUT}`);
 console.log(`[package] ・ store artifact ${OUT_STORE}`);
 console.log(`[package] ${entries.length} files · ${total} bytes raw · ${archive.length} bytes archive`);
 console.log(`[package] contents: ${ENTRIES.join(', ')}`);
+console.log(`[package] ・ load-unpacked folder: ${resolve(DIST_EXT)}`);
+console.log(`[package]   chrome://extensions → toggle "Developer mode" → "Load unpacked" → select the folder above`);
