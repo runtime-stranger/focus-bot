@@ -15,11 +15,45 @@
     return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
   }
 
+  /** Web-standalone fallback: when the page is NOT running inside the extension
+   *  (no chrome.tabs), drive the on-page FocusBot instance directly. FocusBot
+   *  is embedded via <script src="focus-bot.js"> and mounted on window.FocusBot,
+   *  so every control keeps working on a plain HTTPS/localhost page. */
+  function sendLocal(cmd, extra) {
+    const FB = (typeof window !== 'undefined' && window.FocusBot) || null;
+    if (!FB) return { ok: false, error: 'no_focusbot' };
+    try {
+      switch (cmd) {
+        case 'getState':
+          return { ok: true, state: FB.getState() };
+        case 'play': FB.play(); break;
+        case 'pause': FB.pause(); break;
+        case 'toggle': FB.toggle(); break;
+        case 'setMode': if (extra && extra.mode) FB.setMode(extra.mode); break;
+        case 'setVolume':
+          if (extra && extra.which) {
+            const v = Number(extra.value) || 0;
+            if (extra.which === 'binaural') FB.setVolumeBinaural(v);
+            else FB.setVolumeAmbient(v);
+          }
+          break;
+        case 'toggleAmbient': if (extra && extra.kind) FB.toggleAmbient(extra.kind); break;
+        case 'pomodoroStart': if (FB.pomodoro) FB.pomodoro.start(); break;
+        case 'pomodoroStop': if (FB.pomodoro) FB.pomodoro.stop(); break;
+        case 'openUpsell': FB.openPro(); break;
+        default: return { ok: false, error: 'unknown_cmd' };
+      }
+      return { ok: true };
+    } catch (_) {
+      return { ok: false, error: 'local_error' };
+    }
+  }
+
   /** Send a control command to the active tab's FocusBot instance. */
   function send(cmd, extra) {
     return new Promise((resolve) => {
       if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.tabs.query) {
-        resolve({ ok: false, error: 'chrome.tabs unavailable' });
+        resolve(sendLocal(cmd, extra));
         return;
       }
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
