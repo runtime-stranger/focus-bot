@@ -86,7 +86,7 @@
   /* ==========================================================================
    * 1) CONSTANTS
    * ======================================================================== */
-  const MASTER_GAIN_MAX = 0.35;                     // Master slider ceiling — 3.5× output-boost ceiling (dramatic gain)
+  const MASTER_GAIN_MAX = 0.40;                     // Master slider ceiling — the full chain (boost 6 × channels 1.5 × master 0.40) lands at ≈3.6× loudness; peaks are clamped by the final compressor
   const BOOST_GAIN = 6.0;                           // Pre-amp boost (effective max = 0.6)
   const DEFAULT_VOLUME = 0.7;
   const SWEEP_SEC = 1.2;                            // Frequency sweep on mode switch

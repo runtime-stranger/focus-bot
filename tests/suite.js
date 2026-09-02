@@ -38,7 +38,7 @@
    *                   UI sync, Off clears all, noise buffers cached (no regen)
    *   [SCENARIO 74] Master output power: per-channel carrier gains (1.5) with
    *                   +4 dB bass boost on Delta/Theta, binaural stage 1.0,
-   *                   master ceiling → 0.35, final output compressor wiring
+   *                   master ceiling → 0.40, final output compressor wiring
    *   [SCENARIO 75] Ambient repair: brown ×6.0/Kellet-pink/rain + AM/white 5s
    *                   loops, instant layer-gain toggles, resume() on suspended
    *                   context, BiquadFilter routing per layer
@@ -1205,7 +1205,7 @@ async function clientScenarios() {
       expectEqual(oscR.frequency.value, 214, 'Beta Right 214 Hz');
 
       // Default volume 70% -> gain = ceiling(0.35) * 0.7
-      expectApprox(gain.lastRamp, 0.35 * 0.7, 1e-9, 'default gain = 0.35x0.7');
+      expectApprox(gain.lastRamp, 0.4 * 0.7, 1e-9, 'default gain = 0.35x0.7');
 
       fb.setMode('alpha');
       expectEqual(oscL.frequency.value, 200, 'Alpha Left 200 Hz');
@@ -1218,7 +1218,7 @@ async function clientScenarios() {
       const vol = c.stub('.vol-range');
       vol.value = '100';
       vol.dispatch('input');
-      expectApprox(gain.lastTarget, 0.35, 1e-9, 'ceiling gain 0.35 enforced');
+      expectApprox(gain.lastTarget, 0.4, 1e-9, 'ceiling gain 0.40 enforced');
     });
 
     /* ---- SCENARIO 11 ---- */
@@ -1836,7 +1836,7 @@ async function ambientMixerScenarios() {
   });
 
   /* ---- SCENARIO 74 ---- */
-  await scenario('74. Output power: per-channel carrier gains (1.5) with +4 dB bass boost on Delta/Theta, binaural bus 1.0, master ceiling → 0.35, master compressor → destination', async () => {
+  await scenario('74. Output power: per-channel carrier gains (1.5) with +4 dB bass boost on Delta/Theta, binaural bus 1.0, master ceiling → 0.40, master compressor → destination', async () => {
     fb.toggleAmbient('off');
     fb.play();
     await waitFor(() => fb.isPlaying, 2000, 'playing for output-power graph');
@@ -1845,7 +1845,7 @@ async function ambientMixerScenarios() {
     expectApprox(G[9].gain.value, 1.5, 1e-9, 'left carrier channel gain 1.50');
     expectApprox(G[10].gain.value, 1.5, 1e-9, 'right carrier channel gain 1.50');
     expectApprox(G[1].gain.value, 1.0, 1e-9, 'binaural carrier bus raised to 1.00');
-    expectApprox(G.at(-1).gain.lastRamp, 0.35 * 0.7, 1e-9, 'master ceiling now 0.35 → 0.245 output');
+    expectApprox(G.at(-1).gain.lastRamp, 0.4 * 0.7, 1e-9, 'master ceiling now 0.40 → 0.28 output');
     const comp = MockAudioContext.compressors.at(-1);
     expectEqual(comp.threshold.value, -6, 'master compressor threshold -6');
     expectEqual(comp.knee.value, 12, 'master compressor knee 12');
@@ -1962,7 +1962,7 @@ async function clientHardeningScenarios() {
       expectEqual(oscL.frequency.value, 220, 'engine left 220 Hz');
       expectEqual(oscR.frequency.value, 236, 'engine right 236 Hz');
       const gain = MockAudioContext.gains.at(-1).gain;
-      expectApprox(gain.lastRamp, 0.35 * 0.7 * 0.8, 1e-9, 'engine gain coefficient 0.8 applied');
+      expectApprox(gain.lastRamp, 0.4 * 0.7 * 0.8, 1e-9, 'engine gain coefficient 0.8 applied');
       f2.setMode('gamma');
       expectEqual(oscL.frequency.value, 250, 'engine gamma left 250');
       expectEqual(oscR.frequency.value, 292, 'engine gamma right 292');
@@ -2576,7 +2576,7 @@ async function trialVolumeChimeScenarios() {
       expectApprox(G[6].gain.value, 0.95, 1e-9, 'rain layer staged 0.95');
       fb.toggleAmbient('white');
       expectApprox(G[7].gain.value, 0.8, 1e-9, 'white layer staged 0.80');
-      expectApprox(G[11].gain.lastRamp, 0.35 * 0.7, 1e-9, 'master(11) ramps to the 0.245 output ceiling');
+      expectApprox(G[11].gain.lastRamp, 0.4 * 0.7, 1e-9, 'master(11) ramps to the 0.28 output ceiling');
       expectEqual(G[11].connections[0], MockAudioContext.compressors[0], 'master feeds the final master compressor');
       fb.toggleAmbient('off');
       expectEqual(fb.ambients.length, 0, 'off clears all four layers');
@@ -2830,7 +2830,7 @@ async function extensionAuditScenarios() {
       expectEqual(MockAudioContext.oscs.at(-2).frequency.value, 220, 'fresh token left 220');
       expectEqual(MockAudioContext.oscs.at(-1).frequency.value, 236, 'fresh token right 236');
       const g = MockAudioContext.gains.at(-1).gain;
-      expectApprox(g.lastRamp, 0.35 * 0.7 * 0.9, 1e-9, 'fresh gain 0.9 applied');
+      expectApprox(g.lastRamp, 0.4 * 0.7 * 0.9, 1e-9, 'fresh gain 0.9 applied');
     } finally { envB.restore(); }
   });
 }
