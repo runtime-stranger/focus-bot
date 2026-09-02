@@ -2,9 +2,8 @@
 
 # FocusBot — Autonomous Deep Work Suite & Neural Frequency Synthesizer
 
-**Manifest V3 Chrome extension** that synthesizes binaural frequencies, Solfeggio tones and ambient noise in real time with the **Web Audio API** — bundled with a **Smart Pomodoro timer** and a privacy-first, **Bitcoin-only** licensing model.
+**Chrome extension** that synthesizes binaural frequencies, Solfeggio tones and ambient noise in real time with the **Web Audio API** — bundled with a **Smart Pomodoro timer** and a privacy-first, **Bitcoin-only** licensing model.
 
-![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
 ![Web Audio API](https://img.shields.io/badge/Audio-Web%20Audio%20API-38bdf8)
 ![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
 ![License](https://img.shields.io/badge/License-Proprietary-F7931A)
@@ -18,7 +17,7 @@ Everything runs locally in your browser. Nothing is tracked, recorded, or upload
 
 ## What is FocusBot?
 
-FocusBot is a lightweight, **offline-first** Chrome extension for deep work. It synthesizes precise neural frequencies in real time inside your tab using the native **Web Audio API** — zero audio downloads, zero streaming, zero latency. It pairs a **Smart Pomodoro timer** with an **ambient noise mixer**, all inside one floating widget that stays in sync through the MV3 action popup.
+FocusBot is a lightweight, **offline-first** Chrome extension for deep work. It synthesizes precise neural frequencies in real time inside your tab using the native **Web Audio API** — zero audio downloads, zero streaming, zero latency. It pairs a **Smart Pomodoro timer** with an **ambient noise mixer**, all inside one floating widget that stays in sync through the action popup.
 
 - **Zero telemetry** — no analytics, no trackers, no crash reporting.
 - **100% Offline-First** — all sound is generated on your device.
@@ -104,7 +103,7 @@ FocusBot builds a **single `AudioContext`** exactly once, then manages playback 
 ```bash
 npm install      # no runtime dependencies
 npm test         # test suite, zero external calls (Node.js >= 18)
-npm run package  # rebuild the release ZIPs (MV3 flat bundle)
+npm run package  # rebuild the release ZIPs (flat bundle)
 ```
 
 **Test the suite:**
@@ -130,10 +129,10 @@ Writes `focus-bot-extension.zip` and `focus-bot-webstore-v1.3.0.zip` to the repo
 
 ```
 client/
-  manifest.json     MV3 manifest (permissions, CSP, icons)
+  manifest.json     Manifest (permissions, CSP, icons)
   focus-bot.js      Widget engine — audio graph, license, trial
   focus-bot.css     Widget & Buy Pro styles
-  popup.html|js     MV3 action popup (toolbar control)
+  popup.html|js     Action popup (toolbar control)
   index.html        In-repo demo / local test page
   privacy.html      Bundled privacy page
 index.html          Public landing page (GitHub Pages / Vercel / Netlify)
@@ -151,9 +150,8 @@ scripts/            Package + icon generators
 
 # FocusBot — Otonom Derin Çalışma Paketi ve Nöral Frekans Sentezleyici
 
-**Manifest V3 Chrome eklentisi** — **Web Audio API** ile binaural frekansları, Solfeggio tonlarını ve ambient gürültüyü gerçek zamanlı sentezler; **Akıllı Pomodoro** zamanlayıcısı ve gizlilik odaklı, **yalnızca Bitcoin** kabul eden lisanslama modeliyle birlikte gelir.
+**Chrome eklentisi** — **Web Audio API** ile binaural frekansları, Solfeggio tonlarını ve ambient gürültüyü gerçek zamanlı sentezler; **Akıllı Pomodoro** zamanlayıcısı ve gizlilik odaklı, **yalnızca Bitcoin** kabul eden lisanslama modeliyle birlikte gelir.
 
-![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
 ![Web Audio API](https://img.shields.io/badge/Audio-Web%20Audio%20API-38bdf8)
 ![Zero-Telemetry](https://img.shields.io/badge/Telemetry-None-0f766e)
 ![License](https://img.shields.io/badge/License-Proprietary-F7931A)
@@ -167,7 +165,7 @@ Her şey tarayıcınızda yerel olarak çalışır. Hiçbir şey izlenmez, kayde
 
 ### FocusBot Nedir?
 
-FocusBot, derin çalışma için tasarlanmış, hafif ve **çevrimdışı öncelikli** bir Chrome eklentisidir. Yerel **Web Audio API**'sini kullanarak tarayıcı sekmenizde nöral frekansları gerçek zamanlı üretir — sıfır ses indirme, sıfır akış, sıfır gecikme. **Akıllı Pomodoro** zamanlayıcısını bir **ambient gürültü karıştırıcısıyla** birleştirir; hepsi MV3 araç çubuğu popup'ıyla senkron çalışan tek bir yüzen pencerede toplanır.
+FocusBot, derin çalışma için tasarlanmış, hafif ve **çevrimdışı öncelikli** bir Chrome eklentisidir. Yerel **Web Audio API**'sini kullanarak tarayıcı sekmenizde nöral frekansları gerçek zamanlı üretir — sıfır ses indirme, sıfır akış, sıfır gecikme. **Akıllı Pomodoro** zamanlayıcısını bir **ambient gürültü karıştırıcısıyla** birleştirir; hepsi araç çubuğu popup'ıyla senkron çalışan tek bir yüzen pencerede toplanır.
 
 - **Sıfır telemetri** — analitik, takipçi veya çökme raporlaması yok.
 - **%100 Çevrimdışı Öncelikli** — tüm ses cihazınızda üretilir.
@@ -245,7 +243,7 @@ FocusBot tek bir **`AudioContext`** oluşturur ve oynatmayı tamamen `suspend()`
 ```bash
 npm install      # çalışma zamanı bağımlılığı yok
 npm test         # test paketi, sıfır dış çağrı (Node.js >= 18)
-npm run package  # sürüm ZIP'lerini yeniden üretir (MV3 düz paket)
+npm run package  # sürüm ZIP'lerini yeniden üretir (düz paket)
 ```
 
 **Test paketini çalıştırın:**
@@ -269,10 +267,10 @@ Repo köküne `focus-bot-extension.zip` ve `focus-bot-webstore-v1.3.0.zip` yazar
 
 ```
 client/
-  manifest.json     MV3 manifest (izinler, CSP, ikonlar)
+  manifest.json     Manifest (izinler, CSP, ikonlar)
   focus-bot.js      Widget motoru — ses grafiği, lisans, deneme
   focus-bot.css     Widget ve Buy Pro stilleri
-  popup.html|js     MV3 araç çubuğu popup'ı
+  popup.html|js     Araç çubuğu popup'ı
   index.html        Depo içi demo / yerel test sayfası
   privacy.html      Pakete dahil gizlilik sayfası
 index.html          Genel tanıtım sayfası (GitHub Pages / Vercel / Netlify)
