@@ -32,7 +32,7 @@
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  background: linear-gradient(135deg, #5ba4ff 0%, #7c88ff 100%);
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .35);
@@ -49,7 +49,7 @@
   -webkit-user-select: none;
 }
 #focus-bot-root .fab.playing {
-  background: linear-gradient(135deg, #34d399, #38bdf8);
+  background: linear-gradient(135deg, #5ba4ff 0%, #7c88ff 100%);
 }
 #focus-bot-root #icon-play,
 #focus-bot-root #icon-pause {
@@ -197,8 +197,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #38bdf8, #818cf8);
-  box-shadow: 0 8px 22px rgba(56, 189, 248, .4);
+  background: linear-gradient(135deg, #5ba4ff 0%, #7c88ff 100%);
+  box-shadow: 0 8px 22px rgba(91, 164, 255, .4);
   transition: transform .18s ease;
 }
 /* Play/Pause icons — forced dark navy (#0b192c) to match the PRO badge text,

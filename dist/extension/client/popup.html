@@ -29,7 +29,20 @@
     h1 { font-size: 14px; font-weight: 700; flex: 1; }
     .pro-chip { font-size: 10px; font-weight: 800; letter-spacing: .8px; color: #06283d;
       background: linear-gradient(90deg, var(--acc), var(--acc2)); padding: 3px 8px; border-radius: 999px; }
-    .row { display: flex; gap: 6px; margin-bottom: 8px; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    /* Round blue Play control — the circular button with the dark navy glyph */
+    .row.play-row { justify-content: center; }
+    .round-control {
+      flex: none; width: 52px; height: 52px; padding: 0;
+      border: 0; border-radius: 50%; cursor: pointer;
+      background: linear-gradient(135deg, #5ba4ff 0%, #7c88ff 100%);
+      box-shadow: 0 8px 22px rgba(91, 164, 255, .35);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: transform .18s ease, opacity .15s ease;
+    }
+    .round-control:hover { transform: scale(1.06); }
+    .round-control:active { transform: scale(.92); }
+    .round-control svg { width: 20px; height: 20px; }
     .btn { flex: 1; border: 1px solid var(--line); background: var(--surf); color: var(--text);
       border-radius: 10px; padding: 9px 0; font-size: 12px; font-weight: 600; cursor: pointer; }
     .btn:hover { border-color: rgba(56,189,248,.5); }
@@ -96,9 +109,9 @@
 
   <button type="button" class="buy-pro" id="buy-pro">Buy Pro</button>
 
-  <div class="row">
-    <button class="btn primary" id="btn-play">▶ Play</button>
-    <button class="btn primary" id="btn-pause">⏸ Pause</button>
+  <div class="row play-row">
+    <button class="btn primary round-control" id="btn-play" aria-label="Play"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></button>
+    <button class="btn primary round-control" id="btn-pause" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
   </div>
 
   <label>Binaural Waves</label>
